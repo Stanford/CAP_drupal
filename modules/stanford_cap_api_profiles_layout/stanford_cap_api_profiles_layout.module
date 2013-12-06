@@ -40,7 +40,7 @@ function stanford_cap_api_profiles_layout_check_layout() {
       // Creating filed_group for heading.
       $entity_type = 'node';
       $bundle = 'cap_faculty_profile';
-      $group_name = _stanford_cap_api_profiles_generate_field_name($heading['name']);
+      $group_name = _stanford_cap_api_profiles_get_field_name($heading['name']);
       $label = $heading['name'];
       $children = array();
 
@@ -58,7 +58,7 @@ function stanford_cap_api_profiles_layout_check_layout() {
           'label' => $label,
           'format_type' => 'fieldset',
           'format_settings' => array(
-            'formatter' => 'collapsible',
+            'formatter' => 'open',
             'instance_settings' => array(
               'description' => '',
             ),
@@ -132,8 +132,15 @@ function stanford_cap_api_profiles_layout_form_stanford_cap_api_profiles_profile
   $form['actions']['layout_reset'] = array(
     '#type' => 'submit',
     '#value' => t('Reset profiles layout'),
-    '#submit' => array('stanford_cap_api_profiles_layout_reset'),
+    '#submit' => array('_stanford_cap_api_profiles_layout_reset_wrapper'),
   );
+}
+
+/**
+ * Wrapper around stanford_cap_api_profiles_layout_reset().
+ */
+function _stanford_cap_api_profiles_layout_reset_wrapper() {
+  stanford_cap_api_profiles_layout_reset();
 }
 
 /**
@@ -156,7 +163,7 @@ function _stanford_cap_api_profiles_layout_sync_sections($section, $heading_name
   $mode = 'full';
   $bundle = 'cap_faculty_profile';
   $entity_type = 'node';
-  $group_name = _stanford_cap_api_profiles_generate_field_name($section['name']);
+  $group_name = _stanford_cap_api_profiles_get_field_name($section['name']);
   $children = array();
   $field_weight = 0;
   foreach ($section['displayFields'] as $field_path) {
@@ -304,6 +311,9 @@ function _stanford_cap_api_profiles_layout_set_instance_display_settings(&$field
       );
       $variable_name = 'field_bundle_settings_field_collection_item__' . $field_instance['field_name'];
       variable_set($variable_name, $variable);
+      $display['settings']['add'] = '';
+      $display['settings']['edit'] = '';
+      $display['settings']['delete'] = '';
     }
   }
 }
