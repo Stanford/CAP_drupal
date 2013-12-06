@@ -7,7 +7,7 @@ dependencies[] = ctools
 dependencies[] = date
 dependencies[] = entity
 dependencies[] = features
-dependencies[] = field_collection (>7.x-1.0-beta5)
+dependencies[] = field_collection (>=7.x-1.0-beta5)
 dependencies[] = link
 dependencies[] = number
 dependencies[] = stanford_cap_api_orgs
