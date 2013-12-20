@@ -21,33 +21,52 @@ function stanford_cap_api_menu() {
     'file path' => drupal_get_path('module', 'system'),
   );
 
-  $items['admin/config/cap/config'] = array(
-    'title' => 'Details',
-    'description' => "Displays information about the site's connection to the CAP API.",
-    'weight' => -10,
-    'page callback' => 'drupal_get_form',
-    'page arguments' => array('stanford_cap_api_details_form'),
-    'access arguments' => array('administer cap api'),
-    'file' => 'stanford_cap_api.admin.inc',
-  );
+  if (!variable_get('stanford_cap_api_configured')) {
+    $items['admin/config/cap/config'] = array(
+      'title' => 'CAP API Settings',
+      'description' => 'Provides administrators ability to change CAP API access settings.',
+      'page callback' => 'drupal_get_form',
+      'page arguments' => array('stanford_cap_api_settings_form'),
+      'access arguments' => array('administer cap api'),
+      'weight' => -10,
+      'file' => 'stanford_cap_api.admin.inc',
+    );
 
-  $items['admin/config/cap/config/details'] = array(
-    'title' => 'Details',
-    'description' => "Displays information about the site's connection to the CAP API.",
-    'weight' => -10,
-    'type' => MENU_DEFAULT_LOCAL_TASK,
-  );
+    $items['admin/config/cap/config/settings'] = array(
+      'title' => 'Settings',
+      'description' => 'Provides administrators ability to change CAP API access settings.',
+      'type' => MENU_DEFAULT_LOCAL_TASK,
+    );
+  }
+  else {
+    $items['admin/config/cap/config'] = array(
+      'title' => 'Details',
+      'description' => "Displays information about the site's connection to the CAP API.",
+      'weight' => -10,
+      'page callback' => 'drupal_get_form',
+      'page arguments' => array('stanford_cap_api_details_form'),
+      'access arguments' => array('administer cap api'),
+      'file' => 'stanford_cap_api.admin.inc',
+    );
 
-  $items['admin/config/cap/config/settings'] = array(
-    'title' => 'Settings',
-    'description' => 'Provides administrators ability to change CAP API access settings.',
-    'page callback' => 'drupal_get_form',
-    'page arguments' => array('stanford_cap_api_settings_form'),
-    'access arguments' => array('administer cap api'),
-    'weight' => 10,
-    'file' => 'stanford_cap_api.admin.inc',
-    'type' => MENU_LOCAL_TASK,
-  );
+    $items['admin/config/cap/config/details'] = array(
+      'title' => 'Details',
+      'description' => "Displays information about the site's connection to the CAP API.",
+      'weight' => -10,
+      'type' => MENU_DEFAULT_LOCAL_TASK,
+    );
+
+    $items['admin/config/cap/config/settings'] = array(
+      'title' => 'Settings',
+      'description' => 'Provides administrators ability to change CAP API access settings.',
+      'page callback' => 'drupal_get_form',
+      'page arguments' => array('stanford_cap_api_settings_form'),
+      'access arguments' => array('administer cap api'),
+      'weight' => 10,
+      'file' => 'stanford_cap_api.admin.inc',
+      'type' => MENU_LOCAL_TASK,
+    );
+  }
 
   return $items;
 }
@@ -82,9 +101,9 @@ function stanford_cap_api_auth($user = '', $pass = '', $auth_uri = '') {
 
   $token_expire = variable_get('stanford_cap_api_token_expire', REQUEST_TIME);
   if ($token_expire <= REQUEST_TIME || !empty($user) || !empty($pass)) {
-    $auth_uri = empty($auth_uri) ? variable_get('cap_auth_uri', 'https://authz.stanford.edu/oauth/token') : $auth_uri;
-    $user = empty($user) ? variable_get('cap_username', '') : $user;
-    $pass = empty($pass) ? variable_get('cap_password', '') : $pass;
+    $auth_uri = empty($auth_uri) ? variable_get('stanford_cap_api_auth_uri', 'https://authz.stanford.edu/oauth/token') : $auth_uri;
+    $user = empty($user) ? variable_get('stanford_cap_api_username', '') : $user;
+    $pass = empty($pass) ? variable_get('stanford_cap_api_password', '') : $pass;
 
     $params = array(
       'grant_type' => 'client_credentials',
@@ -159,7 +178,7 @@ function stanford_cap_api_auth($user = '', $pass = '', $auth_uri = '') {
  *   Decoded JSON response or FALSE.
  */
 function stanford_cap_api_request($endpoint, $params = array()) {
-  $api_base = variable_get('cap_api_base_url', 'https://cap.stanford.edu/cap-api');
+  $api_base = variable_get('stanford_cap_api_base_url', 'https://cap.stanford.edu/cap-api');
 
   $access_token = stanford_cap_api_auth();
   // Unable to fetch an auth token.
@@ -233,4 +252,21 @@ function stanford_cap_api_theme() {
       'template' => 'info_item',
     ),
   );
+}
+
+/**
+ * Implements hook_batch_alter().
+ *
+ * In case batch was set in stanford_cap_api_settings_form and module is not
+ * configured set batch redirect to details page.
+ */
+function stanford_cap_api_batch_alter(&$batch) {
+  $username = variable_get('stanford_cap_api_username');
+  if (($batch['source_url'] == 'admin/config/cap/config' || $batch['source_url'] == 'admin/config/cap/config/settings')
+    && (empty($username)
+    || !variable_get('stanford_cap_api_profiles_schema_synchronized', FALSE)
+    || !variable_get('stanford_cap_api_profiles_layout_synced', FALSE)
+    || !variable_get('stanford_cap_api_orgs_imported', FALSE))) {
+    $batch['redirect'] = 'admin/config/cap/config/details';
+  }
 }

@@ -54,6 +54,66 @@ function stanford_cap_api_profiles_field_default_field_instances() {
     ),
   );
 
+  // Exported field_instance: 'node-cap_faculty_profile-cap_profile_image'
+  $field_instances['node-cap_faculty_profile-cap_profile_image'] = array(
+    'bundle' => 'cap_faculty_profile',
+    'deleted' => 0,
+    'description' => '',
+    'display' => array(
+      'default' => array(
+        'label' => 'above',
+        'module' => 'image',
+        'settings' => array(
+          'image_link' => '',
+          'image_style' => '',
+        ),
+        'type' => 'image',
+        'weight' => 3,
+      ),
+      'full' => array(
+        'label' => 'hidden',
+        'module' => 'image',
+        'settings' => array(
+          'image_link' => '',
+          'image_style' => '',
+        ),
+        'type' => 'image',
+        'weight' => -50,
+      ),
+      'teaser' => array(
+        'label' => 'above',
+        'settings' => array(),
+        'type' => 'hidden',
+        'weight' => 0,
+      ),
+    ),
+    'entity_type' => 'node',
+    'field_name' => 'cap_profile_image',
+    'label' => 'CAP profile image',
+    'required' => 0,
+    'settings' => array(
+      'alt_field' => 0,
+      'default_image' => 0,
+      'file_directory' => 'cap_profile_images',
+      'file_extensions' => 'png gif jpg jpeg',
+      'max_filesize' => '',
+      'max_resolution' => '',
+      'min_resolution' => '',
+      'title_field' => 0,
+      'user_register_form' => FALSE,
+    ),
+    'widget' => array(
+      'active' => 1,
+      'module' => 'image',
+      'settings' => array(
+        'preview_image_style' => 'medium',
+        'progress_indicator' => 'throbber',
+      ),
+      'type' => 'image_image',
+      'weight' => 43,
+    ),
+  );
+
   // Exported field_instance: 'node-cap_faculty_profile-cap_profile_link'
   $field_instances['node-cap_faculty_profile-cap_profile_link'] = array(
     'bundle' => 'cap_faculty_profile',
@@ -166,6 +226,7 @@ function stanford_cap_api_profiles_field_default_field_instances() {
   // Translatables
   // Included for use with string extractors like potx.
   t('Body');
+  t('CAP profile image');
   t('CAP profile link');
   t('Date last synced');
 

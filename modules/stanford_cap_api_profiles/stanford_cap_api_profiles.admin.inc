@@ -58,78 +58,130 @@ function stanford_cap_api_profiles_form_stanford_cap_api_details_form_alter(&$fo
 }
 
 /**
- * Form builder for settings page.
+ * Implements hook_form_FORM_ID_alter().
  */
 function stanford_cap_api_profiles_form_stanford_cap_api_settings_form_alter(&$form, &$form_state) {
+  if (!variable_get('stanford_cap_api_profiles_schema_synchronized', FALSE)) {
+    $form['synchronization'] = array(
+      '#type' => 'fieldset',
+      '#title' => t('Synchronization preferences'),
+    );
 
-  $form['synchronization'] = array(
-    '#type' => 'fieldset',
-    '#title' => t('Profile Editing'),
-  );
+    $form['synchronization']['description_wrapper'] = array(
+      '#type' => 'container',
+    );
+    $form['synchronization']['description_wrapper']['description'] = array(
+      '#markup' => t('Please select the data import option that best reflects how you would like to use data from the CAP API.'),
+    );
 
-  $form['synchronization']['description'] = array(
-    '#type' => 'item',
-    '#markup' => t('These options allow authorized users to change the structure and content of CAP profiles. Please note, any changes to profiles will be specific to this site, and will not make their way back up to CAP.'),
-  );
+    $form['synchronization']['stanford_cap_api_import_profile_fields'] = array(
+      '#type' => 'radios',
+      '#default_value' => variable_get('stanford_cap_api_import_profile_fields', 'import_all'),
+      '#options' => array(
+        'import_all' => t('Import all fields for each profile. This will give you a complete list of information.'),
+        'import_list' => t('Import a list of fields for each profile. This will allow you to select the fields that will be imported.'),
+      ),
+    );
 
-  $form['synchronization']['cap_custom_fields'] = array(
-    '#type' => 'checkbox',
-    '#title' => t('Allow user to create custom fields?'),
-    '#description' => t('Check this box to allow users to add / edit / modify fields that are part of faculty profiles. This will allow administrators to customize the information that is stored as part of each CAP profile.'),
-    '#default_value' => variable_get('cap_custom_fields', FALSE),
-  );
+    $form['synchronization']['advanced'] = array(
+      '#type' => 'fieldset',
+      '#title' => t('Advanced'),
+      '#collapsible' => TRUE,
+      '#collapsed' => TRUE,
+    );
 
-  $form['synchronization']['cap_allow_edit'] = array(
-    '#type' => 'checkbox',
-    '#title' => t('Allow user to edit CAP profile information?'),
-    '#description' => t('Check this box to allow users to edit the information contained in a CAP profile. Editing a profile will cause information to be changed for profiles displayed on this website only, and changes will not be synchronized back up to the CAP system.'),
-    '#default_value' => variable_get('cap_allow_edit', FALSE),
-  );
+    $form['synchronization']['advanced']['description_wrapper'] = array(
+      '#type' => 'container',
+    );
+    $form['synchronization']['advanced']['description_wrapper']['description'] = array(
+      '#markup' => t('You can select additional options that control how specific fields will be handled during synchronization.'),
+    );
 
-  $form['refresh'] = array(
-    '#type' => 'fieldset',
-    '#title' => t('Refresh Options'),
-  );
+    $form['synchronization']['advanced']['stanford_cap_api_import_fields_html'] = array(
+      '#type' => 'checkbox',
+      '#title' => t('Import HTML / Plain text fields as a single field.'),
+      '#description' => t('Check this box to limit the number of fields being imported by combining the contents of HTML / Plain text fields when they are being synchronized.'),
+      '#default_value' => variable_get('stanford_cap_api_import_fields_html', TRUE),
+    );
+  }
+  else {
+    $form['synchronization'] = array(
+      '#type' => 'fieldset',
+      '#title' => t('Profile Editing'),
+    );
 
-  $form['refresh']['cap_profile_update'] = array(
-    '#type' => 'radios',
-    '#title' => t('CAP Profiles can be updated regularly to ensure you have the latest content available for the site:'),
-    '#default_value' => variable_get('cap_profile_update', 'nightly'),
-    '#options' => array(
-      'viewing' => t('When viewing the profile.'),
-      'nightly' => t('Nightly.'),
-    ),
-  );
+    $form['synchronization']['description'] = array(
+      '#type' => 'item',
+      '#markup' => t('These options allow authorized users to change the structure and content of CAP profiles. Please note, any changes to profiles will be specific to this site, and will not make their way back up to CAP.'),
+    );
 
-  $form['orphaned'] = array(
-    '#type' => 'fieldset',
-    '#title' => t('Orphaned profiles'),
-  );
+    $form['synchronization']['stanford_cap_api_profile_custom_fields'] = array(
+      '#type' => 'checkbox',
+      '#title' => t('Allow user to create custom fields?'),
+      '#description' => t('Check this box to allow users to add / edit / modify fields that are part of faculty profiles. This will allow administrators to customize the information that is stored as part of each CAP profile.'),
+      '#default_value' => variable_get('stanford_cap_api_profile_custom_fields', FALSE),
+    );
 
-  $options = array(
-    'unpublish' => t('Put the profile in an unpublished state.'),
-    'nothing' => t('Do nothing. The profile will simply continue to exist on the website.'),
-    'remove' => t('Remove it from the site.'),
-  );
-  $form['orphaned']['orphaned_profile_action'] = array(
-    '#type' => 'radios',
-    '#title' => t('When a profile is removed from the CAP API:'),
-    '#default_value' => variable_get('cap_orphaned_profile_action', 'unpublish'),
-    '#options' => $options,
-  );
+    $form['synchronization']['stanford_cap_api_profile_allow_edit'] = array(
+      '#type' => 'checkbox',
+      '#title' => t('Allow user to edit CAP profile information?'),
+      '#description' => t('Check this box to allow users to edit the information contained in a CAP profile. Editing a profile will cause information to be changed for profiles displayed on this website only, and changes will not be synchronized back up to the CAP system.'),
+      '#default_value' => variable_get('stanford_cap_api_profile_allow_edit', FALSE),
+    );
 
-  $form['#submit'][] = 'stanford_cap_api_profiles_settings_form_submit';
+    $form['refresh'] = array(
+      '#type' => 'fieldset',
+      '#title' => t('Refresh Options'),
+    );
+
+    $form['refresh']['stanford_cap_api_profile_update'] = array(
+      '#type' => 'radios',
+      '#title' => t('CAP Profiles can be updated regularly to ensure you have the latest content available for the site:'),
+      '#default_value' => variable_get('stanford_cap_api_profile_update', 'nightly'),
+      '#options' => array(
+        'viewing' => t('When viewing the profile.'),
+        'nightly' => t('Nightly.'),
+      ),
+    );
+
+    $form['orphaned'] = array(
+      '#type' => 'fieldset',
+      '#title' => t('Orphaned profiles'),
+    );
+
+    $options = array(
+      'unpublish' => t('Put the profile in an unpublished state.'),
+      'nothing' => t('Do nothing. The profile will simply continue to exist on the website.'),
+      'remove' => t('Remove it from the site.'),
+    );
+    $form['orphaned']['stanford_cap_api_profile_orphaned_action'] = array(
+      '#type' => 'radios',
+      '#title' => t('When a profile is removed from the CAP API:'),
+      '#default_value' => variable_get('cap_stanford_cap_api_profile_orphaned_action', 'unpublish'),
+      '#options' => $options,
+    );
+  }
+
+  $form['#submit'][25] = 'stanford_cap_api_profiles_settings_form_submit';
+  ksort($form['#submit']);
 }
 
 /**
  * Submit handler for settings form.
  */
 function stanford_cap_api_profiles_settings_form_submit($form, &$form_state) {
-  $values = $form_state['values'];
-  variable_set('cap_custom_fields', $values['cap_custom_fields']);
-  variable_set('cap_allow_edit', $values['cap_allow_edit']);
-  variable_set('cap_orphaned_profile_action', $values['orphaned_profile_action']);
-  variable_set('cap_profile_update', $values['cap_profile_update']);
+  $values =& $form_state['values'];
+  if (!variable_get('stanford_cap_api_profiles_schema_synchronized', FALSE)) {
+    variable_set('stanford_cap_api_import_profile_fields', $values['stanford_cap_api_import_profile_fields']);
+    variable_set('stanford_cap_api_import_fields_html', $values['stanford_cap_api_import_fields_html']);
+    stanford_cap_api_profiles_synchronize_schema(TRUE);
+  }
+  else {
+    variable_set('stanford_cap_api_profile_custom_fields', $values['stanford_cap_api_profile_custom_fields']);
+    variable_set('stanford_cap_api_profile_allow_edit', $values['stanford_cap_api_profile_allow_edit']);
+    variable_set('cap_stanford_cap_api_profile_orphaned_action', $values['stanford_cap_api_profile_orphaned_action']);
+    variable_set('stanford_cap_api_profile_update', $values['stanford_cap_api_profile_update']);
+  }
 }
 
 /**
@@ -393,39 +445,11 @@ function stanford_cap_api_profiles_import_result_form_submit($form, &$form_state
     $batch = array(
       'title' => t('Importing profiles'),
       'operations' => $operations,
-      'progress_message' => t('Current: @current | Remaining:
-    @remaining | Total: @total | Percentage: @percentage | Estimate:
-    @estimate | Elapsed: @elapsed'),
+      'progress_message' => t('Current: @current | Remaining: @remaining | Total: @total | Estimate: @estimate | Elapsed: @elapsed'),
       'finished' => 'stanford_cap_api_profiles_import_result_finished',
     );
     batch_set($batch);
   }
-}
-
-/**
- * Form builder for import result page.
- */
-function stanford_cap_api_profiles_profile_test($form, &$form_state) {
-  $form['description'] = array(
-    '#type' => 'item',
-    '#prefix' => '<h3>',
-    '#suffix' => '</h3>',
-    '#markup' => t('Please use the options below to test the faculty profile structure synchronization.'),
-  );
-
-  $form['actions'] = array('#type' => 'actions');
-  $form['actions']['sync'] = array(
-    '#type' => 'submit',
-    '#value' => t('Synchronize fields in the faculty profile'),
-    '#submit' => array('_stanford_cap_api_profiles_sync_schema_batch'),
-  );
-  $form['actions']['reset'] = array(
-    '#type' => 'submit',
-    '#value' => t('Reset faculty profile content type'),
-    '#submit' => array('stanford_cap_api_profiles_reset'),
-  );
-
-  return $form;
 }
 
 /**
