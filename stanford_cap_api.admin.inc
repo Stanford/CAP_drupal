@@ -82,7 +82,7 @@ function stanford_cap_api_settings_form($form, &$form_state) {
     '#type' => 'textfield',
     '#title' => t('Endpoint'),
     '#description' => t('CAP API endpoint URI, only useful when switching between development/production environment.'),
-    '#default_value' => variable_get('stanford_cap_api_base_url', 'https://cap.stanford.edu/cap-api'),
+    '#default_value' => variable_get('stanford_cap_api_base_url', 'https://api.stanford.edu'),
     '#required' => TRUE,
   );
 
@@ -100,12 +100,8 @@ function stanford_cap_api_settings_form($form, &$form_state) {
     '#value' => t('Save settings'),
   );
 
-  $cap_username = variable_get('stanford_cap_api_username');
-  if (empty($cap_username)) {
+  if (!variable_get('stanford_cap_api_configured', FALSE)) {
     $form['actions']['submit']['#value'] = t('Next');
-  }
-  else {
-    $form['actions']['submit']['#value'] = t('Save settings');
   }
 
   return $form;
@@ -151,7 +147,7 @@ function stanford_cap_api_settings_form_submit($form, &$form_state) {
  * Checks that we can connect to CAP API.
  */
 function stanford_cap_api_auth_status() {
-  if (stanford_cap_api_request('/api/profiles/v1')) {
+  if (stanford_cap_api_request('/profiles/v1')) {
     return TRUE;
   }
   else {

@@ -25,8 +25,8 @@ function stanford_cap_api_profiles_views_api($module = NULL, $api = NULL) {
  */
 function stanford_cap_api_profiles_node_info() {
   $items = array(
-    'cap_faculty_profile' => array(
-      'name' => t('Faculty profile'),
+    'cap_stanford_profile' => array(
+      'name' => t('Stanford profile'),
       'base' => 'node_content',
       'description' => '',
       'has_title' => '1',

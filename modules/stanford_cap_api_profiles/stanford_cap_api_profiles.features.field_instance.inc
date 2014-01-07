@@ -10,9 +10,9 @@
 function stanford_cap_api_profiles_field_default_field_instances() {
   $field_instances = array();
 
-  // Exported field_instance: 'node-cap_faculty_profile-body'
-  $field_instances['node-cap_faculty_profile-body'] = array(
-    'bundle' => 'cap_faculty_profile',
+  // Exported field_instance: 'node-cap_stanford_profile-body'
+  $field_instances['node-cap_stanford_profile-body'] = array(
+    'bundle' => 'cap_stanford_profile',
     'default_value' => NULL,
     'deleted' => 0,
     'description' => '',
@@ -54,9 +54,9 @@ function stanford_cap_api_profiles_field_default_field_instances() {
     ),
   );
 
-  // Exported field_instance: 'node-cap_faculty_profile-cap_profile_image'
-  $field_instances['node-cap_faculty_profile-cap_profile_image'] = array(
-    'bundle' => 'cap_faculty_profile',
+  // Exported field_instance: 'node-cap_stanford_profile-cap_profile_image'
+  $field_instances['node-cap_stanford_profile-cap_profile_image'] = array(
+    'bundle' => 'cap_stanford_profile',
     'deleted' => 0,
     'description' => '',
     'display' => array(
@@ -114,9 +114,9 @@ function stanford_cap_api_profiles_field_default_field_instances() {
     ),
   );
 
-  // Exported field_instance: 'node-cap_faculty_profile-cap_profile_link'
-  $field_instances['node-cap_faculty_profile-cap_profile_link'] = array(
-    'bundle' => 'cap_faculty_profile',
+  // Exported field_instance: 'node-cap_stanford_profile-cap_profile_link'
+  $field_instances['node-cap_stanford_profile-cap_profile_link'] = array(
+    'bundle' => 'cap_stanford_profile',
     'default_value' => NULL,
     'deleted' => 0,
     'description' => '',
@@ -168,9 +168,9 @@ function stanford_cap_api_profiles_field_default_field_instances() {
     ),
   );
 
-  // Exported field_instance: 'node-cap_faculty_profile-cap_sync_date'
-  $field_instances['node-cap_faculty_profile-cap_sync_date'] = array(
-    'bundle' => 'cap_faculty_profile',
+  // Exported field_instance: 'node-cap_stanford_profile-cap_sync_date'
+  $field_instances['node-cap_stanford_profile-cap_sync_date'] = array(
+    'bundle' => 'cap_stanford_profile',
     'default_value' => NULL,
     'deleted' => 0,
     'description' => '',

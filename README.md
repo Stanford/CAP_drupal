@@ -65,4 +65,4 @@ profiles layout" button. This uses the CAP layouts endpoint to create a display
 mode for the faculty profile content type and provide a sensible layout based on
 CAP's suggestion on what data should be displayed.
 
-See admin/structure/types/manage/cap_faculty_profile/display/full
+See admin/structure/types/manage/cap_stanford_profile/display/full

@@ -173,12 +173,15 @@ function stanford_cap_api_auth($user = '', $pass = '', $auth_uri = '') {
  *   Endpoint string.
  * @param array $params
  *   Additional parameters for request.
+ * @param bool $raw
+ *   Indicates in which form data should be returned, case TRUE JSON will be
+ * returned, array otherwise.
  *
  * @return array
  *   Decoded JSON response or FALSE.
  */
-function stanford_cap_api_request($endpoint, $params = array()) {
-  $api_base = variable_get('stanford_cap_api_base_url', 'https://cap.stanford.edu/cap-api');
+function stanford_cap_api_request($endpoint, $params = array(), $raw = FALSE) {
+  $api_base = variable_get('stanford_cap_api_base_url', 'https://api.stanford.edu');
 
   $access_token = stanford_cap_api_auth();
   // Unable to fetch an auth token.
@@ -210,19 +213,66 @@ function stanford_cap_api_request($endpoint, $params = array()) {
 
   // Log bad API authentication.
   $data = json_decode($response->data, TRUE);
-  if (array_key_exists('error', $data)) {
-    $error_msg = 'Error found in CAP API response. Error message is "%msg",'
-      . ' response data was "%data".';
-    $vars = array(
-      '%msg' => $data['error_description'],
-      '%data' => print_r($data, TRUE),
-    );
-    watchdog('stanford_cap_api', $error_msg, $vars, WATCHDOG_WARNING);
+  if (empty($data)) {
+    // JSON from response cannot be decoded.
+    $message = '';
+    switch (json_last_error()) {
+      case JSON_ERROR_NONE:
+        $message .= 'No errors';
+        break;
+
+      case JSON_ERROR_DEPTH:
+        $message .= 'Maximum stack depth exceeded.';
+        break;
+
+      case JSON_ERROR_STATE_MISMATCH:
+        $message .= 'Underflow or the modes mismatch.';
+        break;
+
+      case JSON_ERROR_CTRL_CHAR:
+        $message .= 'Unexpected control character found.';
+        break;
+
+      case JSON_ERROR_SYNTAX:
+        $message .= 'Syntax error, malformed JSON.';
+        break;
+
+      case JSON_ERROR_UTF8:
+        $message .= 'Malformed UTF-8 characters, possibly incorrectly encoded.';
+        break;
+
+      default:
+        $message .= 'Unknown error.';
+        break;
+    }
+    if (function_exists('json_last_error_msg')) {
+      $message .= ' Additional error info "' . json_last_error_msg() . '".';
+    }
+    $message .= ' Request string was "%request".';
+    $vars = array('%request' => $request_url);
+    watchdog('stanford_cap_api', $message, $vars, WATCHDOG_WARNING);
 
     return FALSE;
   }
   else {
-    return $data;
+    if (array_key_exists('error', $data)) {
+      $error_msg = 'Error found in CAP API response. Error message is "%msg", response data was "%data".';
+      $vars = array(
+        '%msg' => $data['error_description'],
+        '%data' => print_r($data, TRUE),
+      );
+      watchdog('stanford_cap_api', $error_msg, $vars, WATCHDOG_WARNING);
+
+      return FALSE;
+    }
+    else {
+      if ($raw) {
+        return $response->data;
+      }
+      else {
+        return $data;
+      }
+    }
   }
 }
 

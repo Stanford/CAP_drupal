@@ -15,7 +15,7 @@ function stanford_cap_api_profiles_form_stanford_cap_api_details_form_alter(&$fo
   $query = new EntityFieldQuery();
   $count = $query
     ->entityCondition('entity_type', 'node')
-    ->entityCondition('bundle', 'cap_faculty_profile')
+    ->entityCondition('bundle', 'cap_stanford_profile')
     ->count()
     ->execute();
   $additional_vars = array(
@@ -61,48 +61,79 @@ function stanford_cap_api_profiles_form_stanford_cap_api_details_form_alter(&$fo
  * Implements hook_form_FORM_ID_alter().
  */
 function stanford_cap_api_profiles_form_stanford_cap_api_settings_form_alter(&$form, &$form_state) {
+  $form['#attached']['library'][] = array('stanford_cap_api_profiles', 'stanford_cap_api_profiles_fields');
   if (!variable_get('stanford_cap_api_profiles_schema_synchronized', FALSE)) {
-    $form['synchronization'] = array(
-      '#type' => 'fieldset',
-      '#title' => t('Synchronization preferences'),
-    );
+    if (isset($form_state['values']) && isset($form_state['values']['stanford_cap_api_import_profile_fields']) && $form_state['values']['stanford_cap_api_import_profile_fields'] == CAP_FIELDS_IMPORT_LIST) {
+      // Import of fields list was selected. Building fields list select form.
+      $form['auth']['#access'] = FALSE;
+      $form['description_wrapper']['description']['#markup'] = t('Please select the fields for CAP Profiles that will be synchronized with the CAP API.');
+      $form['actions']['submit']['#value'] = t('Next');
+      $form['actions']['submit']['#weight'] = 1;
 
-    $form['synchronization']['description_wrapper'] = array(
-      '#type' => 'container',
-    );
-    $form['synchronization']['description_wrapper']['description'] = array(
-      '#markup' => t('Please select the data import option that best reflects how you would like to use data from the CAP API.'),
-    );
+      $form['actions']['back'] = array(
+        '#type' => 'submit',
+        '#value' => t('Back'),
+        '#executes_submit_callback' => FALSE,
+        '#weight' => 1,
+      );
 
-    $form['synchronization']['stanford_cap_api_import_profile_fields'] = array(
-      '#type' => 'radios',
-      '#default_value' => variable_get('stanford_cap_api_import_profile_fields', 'import_all'),
-      '#options' => array(
-        'import_all' => t('Import all fields for each profile. This will give you a complete list of information.'),
-        'import_list' => t('Import a list of fields for each profile. This will allow you to select the fields that will be imported.'),
-      ),
-    );
+      $form['fields'] = array(
+        '#theme' => 'stanford_cap_api_profiles_field_tree',
+        '#tree' => TRUE,
+      );
 
-    $form['synchronization']['advanced'] = array(
-      '#type' => 'fieldset',
-      '#title' => t('Advanced'),
-      '#collapsible' => TRUE,
-      '#collapsed' => TRUE,
-    );
+      $schema = stanford_cap_api_profiles_get_profile_schema();
+      // Basic check that we have an expected schema.
+      if (is_array($schema) && $schema['type'] == 'object' && !empty($schema['properties'])) {
+        _stanford_cap_api_profiles_field_checkboxes($schema['properties'], $form['fields']);
+      }
 
-    $form['synchronization']['advanced']['description_wrapper'] = array(
-      '#type' => 'container',
-    );
-    $form['synchronization']['advanced']['description_wrapper']['description'] = array(
-      '#markup' => t('You can select additional options that control how specific fields will be handled during synchronization.'),
-    );
+    }
+    else {
+      $form['synchronization'] = array(
+        '#type' => 'fieldset',
+        '#title' => t('Synchronization preferences'),
+      );
 
-    $form['synchronization']['advanced']['stanford_cap_api_import_fields_html'] = array(
-      '#type' => 'checkbox',
-      '#title' => t('Import HTML / Plain text fields as a single field.'),
-      '#description' => t('Check this box to limit the number of fields being imported by combining the contents of HTML / Plain text fields when they are being synchronized.'),
-      '#default_value' => variable_get('stanford_cap_api_import_fields_html', TRUE),
-    );
+      $form['synchronization']['description_wrapper'] = array(
+        '#type' => 'container',
+      );
+      $form['synchronization']['description_wrapper']['description'] = array(
+        '#markup' => t('Please select the data import option that best reflects how you would like to use data from the CAP API.'),
+      );
+
+      $form['synchronization']['stanford_cap_api_import_profile_fields'] = array(
+        '#type' => 'radios',
+        '#default_value' => variable_get('stanford_cap_api_import_profile_fields', CAP_FIELDS_IMPORT_ALL),
+        '#options' => array(
+          CAP_FIELDS_IMPORT_ALL => t('Import all fields for each profile. This will give you a complete list of information.'),
+          CAP_FIELDS_IMPORT_LIST => t('Import a list of fields for each profile. This will allow you to select the fields that will be imported.'),
+        ),
+      );
+
+      $form['synchronization']['advanced'] = array(
+        '#type' => 'fieldset',
+        '#title' => t('Advanced'),
+        '#collapsible' => TRUE,
+        '#collapsed' => TRUE,
+      );
+
+      $form['synchronization']['advanced']['description_wrapper'] = array(
+        '#type' => 'container',
+      );
+      $form['synchronization']['advanced']['description_wrapper']['description'] = array(
+        '#markup' => t('You can select additional options that control how specific fields will be handled during synchronization.'),
+      );
+
+      $form['synchronization']['advanced']['stanford_cap_api_import_fields_html'] = array(
+        '#type' => 'checkbox',
+        '#title' => t('Import HTML / Plain text fields as a single field.'),
+        '#description' => t('Check this box to limit the number of fields being imported by combining the contents of HTML / Plain text fields when they are being synchronized.'),
+        '#default_value' => variable_get('stanford_cap_api_import_fields_html', TRUE),
+      );
+
+      $form['actions']['submit']['#value'] = t('Next');
+    }
   }
   else {
     $form['synchronization'] = array(
@@ -171,10 +202,25 @@ function stanford_cap_api_profiles_form_stanford_cap_api_settings_form_alter(&$f
  */
 function stanford_cap_api_profiles_settings_form_submit($form, &$form_state) {
   $values =& $form_state['values'];
+  // Field schema not synced yet.
   if (!variable_get('stanford_cap_api_profiles_schema_synchronized', FALSE)) {
-    variable_set('stanford_cap_api_import_profile_fields', $values['stanford_cap_api_import_profile_fields']);
-    variable_set('stanford_cap_api_import_fields_html', $values['stanford_cap_api_import_fields_html']);
-    stanford_cap_api_profiles_synchronize_schema(TRUE);
+    if (isset($values['stanford_cap_api_import_profile_fields'])) {
+      // Initial form submit.
+      variable_set('stanford_cap_api_import_profile_fields', $values['stanford_cap_api_import_profile_fields']);
+      variable_set('stanford_cap_api_import_fields_html', $values['stanford_cap_api_import_fields_html']);
+      if ($values['stanford_cap_api_import_profile_fields'] == CAP_FIELDS_IMPORT_LIST && !isset($values['fields'])) {
+        // We need to select fields to sync.
+        $form_state['rebuild'] = TRUE;
+      }
+      else {
+        stanford_cap_api_profiles_synchronize_schema(TRUE);
+      }
+    }
+    // Submitted after rebuild.
+    else {
+      _stanford_cap_api_profiles_store_sync_field_list($values['fields']);
+      stanford_cap_api_profiles_synchronize_schema(TRUE);
+    }
   }
   else {
     variable_set('stanford_cap_api_profile_custom_fields', $values['stanford_cap_api_profile_custom_fields']);
@@ -274,7 +320,7 @@ function stanford_cap_api_profiles_import_form_submit($form, &$form_state) {
   }
 
   $_SESSION['search_params'] = $params;
-  $_SESSION['search_response'] = stanford_cap_api_request('/api/profiles/v1', $params);
+  $_SESSION['search_response'] = stanford_cap_api_request('/profiles/v1', $params);
 
   $form_state['redirect'] = 'admin/config/cap/config/import/result';
 }
@@ -328,7 +374,7 @@ function stanford_cap_api_profiles_import_result_form($form, &$form_state) {
     $search_params = $_SESSION['search_params'];
     if ($page_num != 1) {
       $search_params['p'] = $page_num;
-      $_SESSION['search_response'] = stanford_cap_api_request('/api/profiles/v1', $search_params);
+      $_SESSION['search_response'] = stanford_cap_api_request('/profiles/v1', $search_params);
       $search_response = $_SESSION['search_response'];
     }
     else {
@@ -337,7 +383,7 @@ function stanford_cap_api_profiles_import_result_form($form, &$form_state) {
       }
       else {
         $search_params['p'] = $page_num;
-        $_SESSION['search_response'] = stanford_cap_api_request('/api/profiles/v1', $search_params);
+        $_SESSION['search_response'] = stanford_cap_api_request('/profiles/v1', $search_params);
         $search_response = $_SESSION['search_response'];
       }
     }
@@ -475,7 +521,7 @@ function stanford_cap_api_profiles_reset() {
   db_delete('cap_api_fields')->execute();
   variable_del('stanford_cap_api_profiles_schema_synchronized');
   variable_del('stanford_cap_api_profiles_schema_hash');
-  drupal_set_message(t('Faculty profile content type has being resetted to default.'));
+  drupal_set_message(t('Stanford profile content type has being resetted to default.'));
 }
 
 /**
@@ -636,18 +682,30 @@ function stanford_cap_api_profiles_group_sync_form_submit($form, &$form_state) {
     foreach ($form_state['values']['groups_list'] as $group_type) {
       if (isset($form_state['values']['groups_to_save'][$group_type])) {
         $group_name = $form_state['values']['groups_to_save'][$group_type];
+        $count = 0;
         $operations[] = array(
-          '_stanford_cap_api_profiles_sync_group_wrapper',
-          array($group_type, $group_name),
+          'stanford_cap_api_profiles_sync_group_save',
+          array($group_type, $group_name, NULL, NULL),
+        );
+        switch ($group_type) {
+          case 'organization':
+            $count = stanford_cap_api_profiles_sync_org_members($group_name, $operations);
+            break;
+
+          case 'workgroup':
+            $count = stanford_cap_api_profiles_sync_workgroup_members($group_name, $operations);
+            break;
+        }
+        $operations[] = array(
+          '_stanford_cap_api_profiles_sync_group_save_wrapper',
+          array($group_type, $group_name, $count),
         );
       }
     }
     $batch = array(
-      'title' => t('Synchronizing profile groups'),
+      'title' => t('Synchronizing group profiles'),
       'operations' => $operations,
-      'progress_message' => t('Current: @current | Remaining:
-    @remaining | Total: @total | Percentage: @percentage | Estimate:
-    @estimate | Elapsed: @elapsed'),
+      'progress_message' => t('Current: @current | Remaining: @remaining | Total: @total | Estimate: @estimate | Elapsed: @elapsed'),
     );
     batch_set($batch);
   }
@@ -669,7 +727,7 @@ function _stanford_cap_api_profiles_get_group_profiles_count($type, $name) {
   switch ($type) {
     case 'organization':
       $params = array('orgCodes' => $name);
-      $data = stanford_cap_api_request('/api/profiles/v1', $params);
+      $data = stanford_cap_api_request('/profiles/v1', $params);
       if ($data) {
         $count = $data['totalCount'];
       }
@@ -677,7 +735,7 @@ function _stanford_cap_api_profiles_get_group_profiles_count($type, $name) {
 
     case 'workgroup':
       $params = array('privGroups' => $name);
-      $data = stanford_cap_api_request('/api/profiles/v1', $params);
+      $data = stanford_cap_api_request('/profiles/v1', $params);
       if ($data) {
         $count = $data['totalCount'];
       }
@@ -719,17 +777,29 @@ function stanford_cap_api_profiles_group_sync_now($id) {
     ->execute()
     ->fetchAssoc();
   $operations = array();
+  $count = 0;
   $operations[] = array(
-    '_stanford_cap_api_profiles_sync_group_wrapper',
-    array($group['type'], $group['name']),
+    'stanford_cap_api_profiles_sync_group_save',
+    array($group['type'], $group['name'], NULL, NULL),
+  );
+  switch ($group['type']) {
+    case 'organization':
+      $count = stanford_cap_api_profiles_sync_org_members($group['name'], $operations);
+      break;
+
+    case 'workgroup':
+      $count = stanford_cap_api_profiles_sync_workgroup_members($group['name'], $operations);
+      break;
+  }
+  $operations[] = array(
+    '_stanford_cap_api_profiles_sync_group_save_wrapper',
+    array($group['type'], $group['name'], $count),
   );
 
   $batch = array(
-    'title' => t('Synchronizing profile groups'),
+    'title' => t('Synchronizing group profiles'),
     'operations' => $operations,
-    'progress_message' => t('Current: @current | Remaining:
-    @remaining | Total: @total | Percentage: @percentage | Estimate:
-    @estimate | Elapsed: @elapsed'),
+    'progress_message' => t('Current: @current | Remaining: @remaining | Total: @total | Estimate: @estimate | Elapsed: @elapsed'),
   );
   batch_set($batch);
   batch_process('admin/config/cap/config/group');
@@ -744,7 +814,7 @@ function stanford_cap_api_profiles_group_sync_now($id) {
 function stanford_cap_api_profiles_user_autocomplete($str = '') {
   $matches = array();
   if ($str) {
-    $response = stanford_cap_api_request('/api/cap/v1/search/autocomplete', array('q' => $str));
+    $response = stanford_cap_api_request('/cap/v1/search/autocomplete', array('q' => $str));
     if (!empty($response['count'])) {
       foreach ($response['values'] as $match) {
         $matches[$match['name']] = $match['name'];
@@ -808,4 +878,71 @@ function _stanford_cap_api_profiles_get_term_tid($str) {
   }
 
   return FALSE;
+}
+
+/**
+ * Creates FAPI checkboxes for fields.
+ */
+function _stanford_cap_api_profiles_field_checkboxes($fields, &$parent_elem, $parent_field = '') {
+  $weight =& drupal_static(__FUNCTION__, -100);
+
+  foreach ($fields as $f_name => $f_schema) {
+    // Skip field collection with empty properties.
+    if ($f_schema['type'] == 'object' && empty($f_schema['properties'])) {
+      continue;
+    }
+    $field_path = empty($parent_field) ? $f_name : $parent_field . '.' . $f_name;
+    $field_level = count(explode('.', $field_path));
+    $parent_elem[$field_path] = array(
+      '#type' => 'checkbox',
+      '#title' => check_plain($f_schema['title']),
+      '#description' => empty($f_schema['description']) ? '' : check_plain($f_schema['description']),
+      '#return_value' => $field_path,
+      '#attributes' => array(
+        'parent' => $parent_field,
+        'class' => array('level-' . $field_level),
+      ),
+    );
+
+    // Field collection field which will be merged to single string field.
+    $merge_field = (variable_get('stanford_cap_api_import_fields_html', TRUE) && $f_schema['type'] == 'object' && !empty($f_schema['properties']) && isset($f_schema['properties']['html']) && isset($f_schema['properties']['text']) && count($f_schema['properties']));
+    // Lets move simple fields upper in list.
+    if (empty($parent_field)
+      && ($f_schema['type'] == 'string'
+      || ($f_schema['type'] == 'array' && $f_schema['items']['type'] == 'string')
+      || $merge_field)) {
+      $parent_elem[$field_path]['#weight'] = $weight;
+      $weight++;
+    }
+    // We do not want to show subfields if field merging was selected.
+    if ($merge_field) {
+      unset($f_schema['properties']);
+    }
+
+    $subfields = array();
+    if ($f_schema['type'] == 'array' && $f_schema['items']['type'] == 'object') {
+      $subfields = $f_schema['items']['properties'];
+    }
+    elseif ($f_schema['type'] == 'object' && !empty($f_schema['properties'])) {
+      $subfields = $f_schema['properties'];
+    }
+    if (!empty($subfields)) {
+      _stanford_cap_api_profiles_field_checkboxes($subfields, $parent_elem, $field_path);
+    }
+  }
+
+}
+
+/**
+ * Stores array of fields to be synchronized in variable.
+ *
+ * Adds a list of orgCode fields to provided list.
+ */
+function _stanford_cap_api_profiles_store_sync_field_list($fields) {
+  $field_list = array_filter($fields);
+  $orgcode_fields = stanford_cap_api_profiles_get_orgcode_fields();
+  if (!empty($orgcode_fields)) {
+    $field_list = array_merge($field_list, $orgcode_fields);
+  }
+  variable_set('stanford_cap_api_profiles_sync_field_list', $field_list);
 }

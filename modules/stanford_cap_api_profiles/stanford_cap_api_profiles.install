@@ -178,3 +178,18 @@ function stanford_cap_api_profiles_schema() {
 
   return $schema;
 }
+
+/**
+ * Implements hook_enable().
+ *
+ * Reads CLOBs field list into variable for later use.
+ */
+function stanford_cap_api_profiles_enable() {
+  $file_name = '/stanford_cap_api_profiles_text_fields_list';
+  $file = new SplFileObject(DRUPAL_ROOT . '/' . drupal_get_path('module', 'stanford_cap_api_profiles') . $file_name, 'r');
+  $fields_list = array();
+  foreach ($file as $field) {
+    $fields_list[] = trim($field);
+  }
+  variable_set('stanford_cap_api_profiles_text_fields_list', array_filter($fields_list));
+}

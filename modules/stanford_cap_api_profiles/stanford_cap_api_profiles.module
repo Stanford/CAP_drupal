@@ -7,6 +7,8 @@
 include_once 'stanford_cap_api_profiles.features.inc';
 include_once 'stanford_cap_api_profiles.admin.inc';
 define('CAP_FIELDS_PREFIX', 'cap_');
+define('CAP_FIELDS_IMPORT_ALL', 'import_all');
+define('CAP_FIELDS_IMPORT_LIST', 'import_list');
 
 /**
  * Implements hook_menu().
@@ -109,16 +111,6 @@ function stanford_cap_api_profiles_permission() {
 }
 
 /**
- * Implements hook_preprocess_page().
- */
-function stanford_cap_api_profiles_preprocess_page(&$variables) {
-  // Include css files only on admin pages.
-  if (arg(0) == 'admin' && arg(1) == 'config' && arg(2) == 'cap') {
-    drupal_add_css(drupal_get_path('module', 'stanford_cap_api_profiles') . '/css/stanford_cap_api_profiles.css');
-  }
-}
-
-/**
  * Implements hook_menu_alter().
  */
 function stanford_cap_api_profiles_menu_alter(&$items) {
@@ -132,7 +124,7 @@ function stanford_cap_api_profiles_menu_alter(&$items) {
  */
 function stanford_cap_api_profiles_node_access($op, $node) {
   $access = node_access($op, $node);
-  if ($access && $node->type == 'cap_faculty_profile') {
+  if ($access && $node->type == 'cap_stanford_profile') {
     if (!variable_get('stanford_cap_api_profile_allow_edit', FALSE)) {
       $access = FALSE;
     }
@@ -146,7 +138,7 @@ function stanford_cap_api_profiles_node_access($op, $node) {
  */
 function stanford_cap_api_profiles_user_access($permission, $node_type) {
   $access = user_access($permission);
-  if ($access && $node_type->type == 'cap_faculty_profile') {
+  if ($access && $node_type->type == 'cap_stanford_profile') {
     if (!variable_get('stanford_cap_api_profile_custom_fields', FALSE)) {
       $access = FALSE;
     }
@@ -235,7 +227,7 @@ function stanford_cap_api_profiles_profile_import($profile_id) {
 function stanford_cap_api_profiles_get_profile($profile_id) {
   $cache =& drupal_static(__FUNCTION__, array());
   if (empty($cache[$profile_id])) {
-    $cache[$profile_id] = stanford_cap_api_request('/api/profiles/v1/' . $profile_id);
+    $cache[$profile_id] = stanford_cap_api_request('/profiles/v1/' . $profile_id);
   }
 
   return $cache[$profile_id];
@@ -293,7 +285,7 @@ function stanford_cap_api_profiles_synchronize_data($profile) {
     $node->title = $profile['displayName'];
     $node->uid = 0;
     $node->status = 1;
-    $node->type = 'cap_faculty_profile';
+    $node->type = 'cap_stanford_profile';
     $node->created = REQUEST_TIME;
     $node->changed = REQUEST_TIME;
     $node->is_new = TRUE;
@@ -332,10 +324,12 @@ function stanford_cap_api_profiles_node_fields_import($node, $profile) {
   $nw->cap_profile_link->set(array('url' => _stanford_cap_api_profiles_get_cap_profile_url($profile)));
   $nw->cap_sync_date->set(REQUEST_TIME);
   // Profile image handling.
-  $image_type = 'bigger';
-  $fid = _stanford_cap_api_profiles_save_image_file($image_type, $profile['profilePhotos'][$image_type]);
-  if (isset($fid)) {
-    $nw->cap_profile_image = array('fid' => $fid);
+  if (!empty($profile['profilePhotos'])) {
+    $image_type = 'bigger';
+    $fid = _stanford_cap_api_profiles_save_image_file($image_type, $profile['profilePhotos'][$image_type]);
+    if (isset($fid)) {
+      $nw->cap_profile_image = array('fid' => $fid);
+    }
   }
   $nw->save();
   $profile_id = $profile['profileId'];
@@ -344,6 +338,7 @@ function stanford_cap_api_profiles_node_fields_import($node, $profile) {
     'cap_sync_date',
     'cap_profile_image',
   );
+  // Storing profile field hashes to check if data was changed later.
   foreach ($node as $field_name => $field_data) {
     if (is_array($field_data) && !in_array($field_name, $bundled_fields)) {
       $record = array(
@@ -467,22 +462,39 @@ function stanford_cap_api_profiles_get_stored_profile_data($profile_id) {
  *
  * @param string $org_code
  *   CAP organization code.
+ * @param array $operations
+ *   Array to gather operations for batch processing, also used as indicator
+ *   for batch mode.
  *
  * @return int
  *   Count of synced profiles.
  *
  * @see http://www.stanford.edu/dept/pres-provost/budget/org/orgchart/
  */
-function stanford_cap_api_profiles_sync_org_members($org_code) {
+function stanford_cap_api_profiles_sync_org_members($org_code, &$operations = NULL) {
   $count = 0;
   $params = array('orgCodes' => $org_code);
   // This request used to get count of profiles of this organization.
-  $data = stanford_cap_api_request('/api/profiles/v1', $params);
+  $data = stanford_cap_api_request('/profiles/v1', $params);
   if ($data && $data['totalCount'] > 0) {
     $count = $params['ps'] = $data['totalCount'];
-    $data = stanford_cap_api_request('/api/profiles/v1', $params);
-    foreach ($data['values'] as $profile) {
-      stanford_cap_api_profiles_profile_import($profile['profileId']);
+    // Requesting all profiles of organization.
+    $data = stanford_cap_api_request('/profiles/v1', $params);
+    if (!empty($data['values']) && is_array($data['values'])) {
+      foreach ($data['values'] as $profile) {
+        if (isset($operations)) {
+          $operations[] = array(
+            'stanford_cap_api_profiles_profile_import',
+            array($profile['profileId']),
+          );
+        }
+        else {
+          stanford_cap_api_profiles_profile_import($profile['profileId']);
+        }
+      }
+    }
+    else {
+      watchdog('stanford_cap_api_profiles', 'There was issue in retrieving data from CAP service for "@org_code" organization.', array('@org_code' => $org_code));
     }
   }
 
@@ -494,20 +506,37 @@ function stanford_cap_api_profiles_sync_org_members($org_code) {
  *
  * @param string $workgroup_id
  *   CAP workgroup ID.
+ * @param array $operations
+ *   Array to gather operations for batch processing, also used as indicator
+ *  for batch mode.
  *
  * @return int
  *   Count of synced profiles.
  */
-function stanford_cap_api_profiles_sync_workgroup_members($workgroup_id) {
+function stanford_cap_api_profiles_sync_workgroup_members($workgroup_id, &$operations = NULL) {
   $count = 0;
   $params = array('privGroups' => $workgroup_id);
   // This request used to get count of profiles of this organization.
-  $data = stanford_cap_api_request('/api/profiles/v1', $params);
+  $data = stanford_cap_api_request('/profiles/v1', $params);
   if ($data && $data['totalCount'] > 0) {
     $count = $params['ps'] = $data['totalCount'];
-    $data = stanford_cap_api_request('/api/profiles/v1', $params);
-    foreach ($data['values'] as $profile) {
-      stanford_cap_api_profiles_profile_import($profile['profileId']);
+    // Requesting all profiles of organization.
+    $data = stanford_cap_api_request('/profiles/v1', $params);
+    if (!empty($data['values']) && is_array($data['values'])) {
+      foreach ($data['values'] as $profile) {
+        if (isset($operations)) {
+          $operations[] = array(
+            'stanford_cap_api_profiles_profile_import',
+            array($profile['profileId']),
+          );
+        }
+        else {
+          stanford_cap_api_profiles_profile_import($profile['profileId']);
+        }
+      }
+    }
+    else {
+      watchdog('stanford_cap_api_profiles', 'There was issue in retrieving data from CAP service for "@workgroup" workgroup.', array('@workgroup' => $workgroup_id));
     }
   }
 
@@ -599,7 +628,7 @@ function stanford_cap_api_profiles_node_delete($node) {
  */
 function stanford_cap_api_profiles_node_view($node, $view_mode) {
   $update_strategy = variable_get('stanford_cap_api_profile_update', 'nightly');
-  if ($node->type == 'cap_faculty_profile' && $view_mode == 'full' && $update_strategy == 'viewing') {
+  if ($node->type == 'cap_stanford_profile' && $view_mode == 'full' && $update_strategy == 'viewing') {
     $profile_id = db_select('cap_api_profiles', 'p')
       ->condition('nid', $node->nid)
       ->fields('p', array('profile_id'))
@@ -629,7 +658,7 @@ function stanford_cap_api_profiles_action_info() {
  * Stop profile syncing action.
  */
 function stanford_cap_api_profiles_profile_stop_sync_action($entity) {
-  if ($entity->type == 'cap_faculty_profile') {
+  if ($entity->type == 'cap_stanford_profile') {
     $count = db_update('cap_api_profiles')
       ->condition('nid', $entity->nid)
       ->fields(array('sync' => 0))
@@ -700,7 +729,19 @@ function stanford_cap_api_profiles_synchronize_schema($batch = FALSE) {
  *   Profile type schema.
  */
 function stanford_cap_api_profiles_get_profile_schema() {
-  return stanford_cap_api_request('/api/cap/v1/schemas/profile');
+  return stanford_cap_api_request('/cap/v1/schemas/profile');
+}
+
+/**
+ * Implements hook_theme().
+ */
+function stanford_cap_api_profiles_theme() {
+  return array(
+    'stanford_cap_api_profiles_field_tree' => array(
+      'render element' => 'schema_tree',
+      'file' => 'stanford_cap_api_profiles.theme.inc',
+    ),
+  );
 }
 
 /**
@@ -750,7 +791,7 @@ function _stanford_cap_api_profiles_get_cap_profile_url($profile) {
 }
 
 /**
- * Generate Drupal compliant field name.
+ * Generate Drupal compliant field name or retrieve it from DB.
  *
  * @param string $field_name
  *   CAP profile field name.
@@ -994,6 +1035,8 @@ function _stanford_cap_api_profiles_save_field(&$entity, &$wrapper, $field_name,
 /**
  * Get field value for text field.
  *
+ * Truncate profile field length to maximum allowed for Drupal field.
+ *
  * @param string $field_name
  *   Field name.
  * @param array $field_data
@@ -1026,14 +1069,6 @@ function _stanford_cap_api_profiles_get_field_value_text($field_name, $field_dat
 }
 
 /**
- * Wrapper for batch groups synchronization.
- */
-function _stanford_cap_api_profiles_sync_group_wrapper($group_type, $group_name) {
-  stanford_cap_api_profiles_sync_group_save($group_type, $group_name);
-  stanford_cap_api_profiles_sync_group_sync($group_type, $group_name);
-}
-
-/**
  * Generate field info based in field schema.
  *
  * @param string $drupal_field_name
@@ -1042,18 +1077,26 @@ function _stanford_cap_api_profiles_sync_group_wrapper($group_type, $group_name)
  *   Field name form CAP API.
  * @param array $field_schema
  *   Field schema form CAP API.
+ * @param string $field_path
+ *   Field path for layout.
  *
  * @return array
  *   Array used in field_create_field().
  * @see field_create_field()
  */
-function _stanford_cap_api_profiles_generate_field_info($drupal_field_name, $field_name, $field_schema) {
+function _stanford_cap_api_profiles_generate_field_info($drupal_field_name, $field_name, $field_schema, $field_path) {
   $info = NULL;
   switch ($field_schema['type']) {
     case 'array':
       switch ($field_schema['items']['type']) {
         case 'string':
-          $info = _stanford_cap_api_profiles_gen_field_base_def_text_long($drupal_field_name, $field_schema, TRUE);
+          $clob_fields = variable_get('stanford_cap_api_profiles_text_fields_list');
+          if (in_array($field_path, $clob_fields)) {
+            $info = _stanford_cap_api_profiles_gen_field_base_def_text_long($drupal_field_name, $field_schema, TRUE);
+          }
+          else {
+            $info = _stanford_cap_api_profiles_gen_field_base_def_text($drupal_field_name, $field_schema, TRUE);
+          }
           break;
 
         case 'object':
@@ -1098,7 +1141,13 @@ function _stanford_cap_api_profiles_generate_field_info($drupal_field_name, $fie
         $info = _stanford_cap_api_profiles_gen_field_base_def_taxonomy_term_reference($drupal_field_name, $field_schema);
       }
       else {
-        $info = _stanford_cap_api_profiles_gen_field_base_def_text_long($drupal_field_name, $field_schema);
+        $clob_fields = variable_get('stanford_cap_api_profiles_text_fields_list');
+        if (in_array($field_path, $clob_fields)) {
+          $info = _stanford_cap_api_profiles_gen_field_base_def_text_long($drupal_field_name, $field_schema);
+        }
+        else {
+          $info = _stanford_cap_api_profiles_gen_field_base_def_text($drupal_field_name, $field_schema);
+        }
       }
       break;
 
@@ -1190,10 +1239,12 @@ function _stanford_cap_api_profiles_generate_instance_info($type, $field_name, $
  */
 function _stanford_cap_api_profiles_synchronize_schema_subfields($f_name, $f_schema, $drupal_parent_field = '', $parent_field = '', &$operations = NULL) {
   $field_weigth =& drupal_static(__FUNCTION__, 0);
+  $field_path = empty($parent_field) ? $f_name : $parent_field . '.' . $f_name;
+  // Generate Drupal compliant field name.
   $drupal_field_name = _stanford_cap_api_profiles_get_field_name($f_name, $parent_field);
   $field_info = field_info_field($drupal_field_name);
-  if (empty($field_info)) {
-    $field_info = _stanford_cap_api_profiles_generate_field_info($drupal_field_name, $f_name, $f_schema);
+  if (empty($field_info) && stanford_cap_api_profiles_synchronize_field($field_path)) {
+    $field_info = _stanford_cap_api_profiles_generate_field_info($drupal_field_name, $f_name, $f_schema, $field_path);
     // Do we know about this field type?
     if (!empty($field_info)) {
       // We are in batch mode.
@@ -1211,7 +1262,7 @@ function _stanford_cap_api_profiles_synchronize_schema_subfields($f_name, $f_sch
     }
   }
   $parent_entity = empty($parent_field) ? 'node' : 'field_collection_item';
-  $parent_entity_bundle = empty($parent_field) ? 'cap_faculty_profile' : $drupal_parent_field;
+  $parent_entity_bundle = empty($parent_field) ? 'cap_stanford_profile' : $drupal_parent_field;
   $field_instance = field_info_instance($parent_entity, $drupal_field_name, $parent_entity_bundle);
   if (empty($field_instance) && !empty($field_info)) {
     if (!isset($f_schema['weight'])) {
@@ -1229,8 +1280,7 @@ function _stanford_cap_api_profiles_synchronize_schema_subfields($f_name, $f_sch
       else {
         field_create_instance($field_instance);
       }
-      $field_path = empty($parent_field) ? $f_name : $parent_field . '.' . $f_name;
-      _stanford_cap_api_profiles_log_field_map($drupal_field_name, $field_path, $parent_entity, $parent_entity_bundle);
+      _stanford_cap_api_profiles_store_field_map($drupal_field_name, $field_path, $parent_entity, $parent_entity_bundle);
     }
     else {
       $message = 'Failed to create field instance. Field info: @field_info';
@@ -1247,6 +1297,7 @@ function _stanford_cap_api_profiles_synchronize_schema_subfields($f_name, $f_sch
       $subfield_weigth[$drupal_field_name] = 0;
     }
     $subfields = array();
+    // Multivalue field colletion.
     if ($f_schema['type'] == 'array' && $f_schema['items']['type'] == 'object') {
       $subfields = $f_schema['items']['properties'];
     }
@@ -1286,7 +1337,7 @@ function _stanford_cap_api_profiles_gen_field_base_def_text($field_name, $field_
     $max_length = (int) $field_schema['maxLength'];
   }
   else {
-    $max_length = 255;
+    $max_length = 512;
   }
 
   $info = array(
@@ -1486,7 +1537,7 @@ function _stanford_cap_api_profiles_gen_field_base_def_taxonomy_term_reference($
  */
 function _stanford_cap_api_profiles_gen_field_instance_def_boolean($field_name, $schema, $parent_field) {
   $entity_type = empty($parent_field) ? 'node' : 'field_collection_item';
-  $bundle = empty($parent_field) ? 'cap_faculty_profile' : $parent_field;
+  $bundle = empty($parent_field) ? 'cap_stanford_profile' : $parent_field;
   $label = empty($schema['title']) ? '' : $schema['title'];
   $description = empty($schema['description']) ? '' : $schema['description'];
   $weight = isset($schema['weight']) ? $schema['weight'] : 0;
@@ -1528,7 +1579,7 @@ function _stanford_cap_api_profiles_gen_field_instance_def_boolean($field_name, 
  */
 function _stanford_cap_api_profiles_gen_field_instance_def_integer($field_name, $schema, $parent_field) {
   $entity_type = empty($parent_field) ? 'node' : 'field_collection_item';
-  $bundle = empty($parent_field) ? 'cap_faculty_profile' : $parent_field;
+  $bundle = empty($parent_field) ? 'cap_stanford_profile' : $parent_field;
   $label = empty($schema['title']) ? '' : $schema['title'];
   $description = empty($schema['description']) ? '' : $schema['description'];
   $weight = isset($schema['weight']) ? $schema['weight'] : 0;
@@ -1577,7 +1628,7 @@ function _stanford_cap_api_profiles_gen_field_instance_def_integer($field_name, 
  */
 function _stanford_cap_api_profiles_gen_field_instance_def_text($field_name, $schema, $parent_field = '') {
   $entity_type = empty($parent_field) ? 'node' : 'field_collection_item';
-  $bundle = empty($parent_field) ? 'cap_faculty_profile' : $parent_field;
+  $bundle = empty($parent_field) ? 'cap_stanford_profile' : $parent_field;
   $label = empty($schema['title']) ? '' : $schema['title'];
   $description = empty($schema['description']) ? '' : $schema['description'];
   $weight = isset($schema['weight']) ? $schema['weight'] : 0;
@@ -1614,7 +1665,7 @@ function _stanford_cap_api_profiles_gen_field_instance_def_text($field_name, $sc
  */
 function _stanford_cap_api_profiles_gen_field_instance_def_text_long($field_name, $schema, $parent_field = '') {
   $entity_type = empty($parent_field) ? 'node' : 'field_collection_item';
-  $bundle = empty($parent_field) ? 'cap_faculty_profile' : $parent_field;
+  $bundle = empty($parent_field) ? 'cap_stanford_profile' : $parent_field;
   $label = empty($schema['title']) ? '' : $schema['title'];
   $description = empty($schema['description']) ? '' : $schema['description'];
   $weight = isset($schema['weight']) ? $schema['weight'] : 0;
@@ -1653,7 +1704,7 @@ function _stanford_cap_api_profiles_gen_field_instance_def_text_long($field_name
  */
 function _stanford_cap_api_profiles_gen_field_instance_def_field_collection($field_name, $schema, $parent_field = '') {
   $entity_type = empty($parent_field) ? 'node' : 'field_collection_item';
-  $bundle = empty($parent_field) ? 'cap_faculty_profile' : $parent_field;
+  $bundle = empty($parent_field) ? 'cap_stanford_profile' : $parent_field;
   $label = empty($schema['title']) ? '' : $schema['title'];
   $description = empty($schema['description']) ? '' : $schema['description'];
   $weight = isset($schema['weight']) ? $schema['weight'] : 0;
@@ -1707,7 +1758,7 @@ function _stanford_cap_api_profiles_gen_field_instance_def_field_collection($fie
  */
 function _stanford_cap_api_profiles_gen_field_instance_def_date($field_name, $schema, $parent_field = '') {
   $entity_type = empty($parent_field) ? 'node' : 'field_collection_item';
-  $bundle = empty($parent_field) ? 'cap_faculty_profile' : $parent_field;
+  $bundle = empty($parent_field) ? 'cap_stanford_profile' : $parent_field;
   $label = empty($schema['title']) ? '' : $schema['title'];
   $description = empty($schema['description']) ? '' : $schema['description'];
   $weight = isset($schema['weight']) ? $schema['weight'] : 0;
@@ -1763,7 +1814,7 @@ function _stanford_cap_api_profiles_gen_field_instance_def_date($field_name, $sc
  */
 function _stanford_cap_api_profiles_gen_field_instance_def_taxonomy_term_reference($field_name, $schema, $parent_field = '') {
   $entity_type = empty($parent_field) ? 'node' : 'field_collection_item';
-  $bundle = empty($parent_field) ? 'cap_faculty_profile' : $parent_field;
+  $bundle = empty($parent_field) ? 'cap_stanford_profile' : $parent_field;
   $label = empty($schema['title']) ? '' : $schema['title'];
   $description = empty($schema['description']) ? '' : $schema['description'];
   $weight = isset($schema['weight']) ? $schema['weight'] : 0;
@@ -1774,8 +1825,12 @@ function _stanford_cap_api_profiles_gen_field_instance_def_taxonomy_term_referen
     'field_name' => $field_name,
     'label' => $label,
     'widget' => array(
-      'module' => 'hs_taxonomy',
-      'type' => 'taxonomy_hs',
+      'module' => 'taxonomy',
+      'settings' => array(
+        'autocomplete_path' => 'taxonomy/autocomplete',
+        'size' => 60,
+      ),
+      'type' => 'taxonomy_autocomplete',
       'weight' => $weight,
     ),
   );
@@ -1811,7 +1866,7 @@ function _stanford_cap_api_profiles_log_longest_field_length($length) {
  * @param string $bundle
  *   Entity bundle.
  */
-function _stanford_cap_api_profiles_log_field_map($field_name, $field_path, $entity_type, $bundle) {
+function _stanford_cap_api_profiles_store_field_map($field_name, $field_path, $entity_type, $bundle) {
   $record = array(
     'field_name' => $field_name,
     'field_path' => $field_path,
@@ -1854,6 +1909,7 @@ function _stanford_cap_api_profiles_sync_schema_batch() {
 
 /**
  * Helper to save profile image to file.
+ *
  * @param string $field_name
  *   Profile field name.
  * @param array $field_data
@@ -1898,4 +1954,144 @@ function _stanford_cap_api_profiles_save_image_file($field_name, $field_data) {
 
     return $file->fid;
   }
+}
+
+/**
+ * Helper for batch to store correct sync time.
+ */
+function _stanford_cap_api_profiles_sync_group_save_wrapper($type, $name, $count) {
+  stanford_cap_api_profiles_sync_group_save($type, $name, $count, REQUEST_TIME);
+}
+
+/**
+ * Indicates does this field should be imported or not based on field path.
+ *
+ * @param string $field_path
+ *   Field path.
+ *
+ * @return bool
+ *   Indicates if we should synchronize this field.
+ */
+function stanford_cap_api_profiles_synchronize_field($field_path) {
+  $synchronize = FALSE;
+  switch (variable_get('stanford_cap_api_import_profile_fields', CAP_FIELDS_IMPORT_ALL)) {
+    case CAP_FIELDS_IMPORT_ALL:
+      $synchronize = TRUE;
+      break;
+
+    case CAP_FIELDS_IMPORT_LIST:
+      $field_list = variable_get('stanford_cap_api_profiles_sync_field_list', array());
+      $synchronize = _stanford_cap_api_profiles_synchronize_field($field_path, $field_list);
+      break;
+
+    case CAP_FIELDS_IMPORT_LAYOUT:
+      if (module_exists('stanford_cap_api_profiles_layout')) {
+        $plain_layout = stanford_cap_api_profiles_layout_get_plain();
+        $synchronize = _stanford_cap_api_profiles_synchronize_field($field_path, $plain_layout);
+      }
+      else {
+        $synchronize = TRUE;
+      }
+      break;
+  }
+
+  return $synchronize;
+}
+
+/**
+ * Indicates does this field should be imported or not based on field path.
+ *
+ * @param string $field_path
+ *   Field path.
+ * @param array $field_list
+ *   Array of fields to be synced.
+ *
+ * @return bool
+ */
+function _stanford_cap_api_profiles_synchronize_field($field_path, $field_list){
+  $synchronize = FALSE;
+  if (in_array($field_path, $field_list)) {
+    $synchronize = TRUE;
+  }
+  else {
+    // Top level field.
+    if (strpos($field_path, '.') === FALSE) {
+      // SUNET ID field should be included no matter what.
+      if ($field_path == 'uid') {
+        $synchronize = TRUE;
+      }
+      else {
+        // This field didn't listed directly, but maybe it's parent of other
+        // field.
+        foreach ($field_list as $layout_field_path) {
+          if (in_array($field_path, explode('.', $layout_field_path))) {
+            $synchronize = TRUE;
+            break;
+          }
+        }
+      }
+    }
+    else {
+      $levels = count(explode('.', $field_path));
+      foreach ($field_list as $layout_field_path) {
+        $layout_field_path_part = implode('.', array_slice(explode('.', $layout_field_path), 0, $levels));
+        if ($field_path == $layout_field_path_part) {
+          $synchronize = TRUE;
+          break;
+        }
+      }
+    }
+  }
+
+  return $synchronize;
+}
+
+/**
+ * Returns list of orgCode fields.
+ */
+function stanford_cap_api_profiles_get_orgcode_fields() {
+  $orgcode_fields = array();
+  $schema = stanford_cap_api_profiles_get_profile_schema();
+  foreach ($schema['properties'] as $f_name => $f_schema) {
+    _stanford_cap_api_profiles_get_orgcode_fields($f_name, $f_schema, $orgcode_fields);
+  }
+
+  return $orgcode_fields;
+}
+
+/**
+ * Iterates over profile fields to find "orgCode" fields.
+ */
+function _stanford_cap_api_profiles_get_orgcode_fields($f_name, $f_schema, &$orgcode_fields, $parent_field = '') {
+  $field_path = empty($parent_field) ? $f_name : $parent_field . '.' . $f_name;
+  if ($f_name == 'orgCode') {
+    $orgcode_fields[] = $field_path;
+  }
+  $subfields = array();
+  if ($f_schema['type'] == 'array' && $f_schema['items']['type'] == 'object') {
+    $subfields = $f_schema['items']['properties'];
+  }
+  elseif ($f_schema['type'] == 'object' && !empty($f_schema['properties'])) {
+    $subfields = $f_schema['properties'];
+  }
+  foreach ($subfields as $subfield => $schema) {
+    _stanford_cap_api_profiles_get_orgcode_fields($subfield, $schema, $orgcode_fields, $field_path);
+  }
+}
+
+/**
+ * Implements hook_library().
+ */
+function stanford_cap_api_profiles_library() {
+  $libraries['stanford_cap_api_profiles_fields'] = array(
+    'version' => '1.0-beta',
+    'js' => array(
+      drupal_get_path('module', 'stanford_cap_api_profiles') . '/stanford_cap_api_profiles.js' => array(),
+    ),
+    'css' => array(
+      drupal_get_path('module', 'stanford_cap_api_profiles') . '/stanford_cap_api_profiles.css' => array(),
+    ),
+  );
+
+  return $libraries;
 }
