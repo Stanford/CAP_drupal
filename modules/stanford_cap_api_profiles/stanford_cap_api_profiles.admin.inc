@@ -36,7 +36,7 @@ function stanford_cap_api_profiles_form_stanford_cap_api_details_form_alter(&$fo
   $additional = t('You can adjust the frequency of updates on the !settings.', array('!settings' => l(t('settings page'), 'admin/config/cap/config/settings')));
   if (empty($sync_date_stamp)) {
     $vars = array(
-      'message' => t('CAP profiles were not sync yet.'),
+      'message' => t('Stanford profiles have not yet been synchronized.'),
       'additional' => $additional,
     );
 

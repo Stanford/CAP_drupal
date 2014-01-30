@@ -293,17 +293,17 @@ function stanford_cap_api_profiles_synchronize_data($profile) {
     node_save($node);
     $node = node_load($node->nid, NULL, TRUE);
     stanford_cap_api_profiles_node_fields_import($node, $profile);
-    // Saving profile<->node association.
-    $record = array(
-      'profile_id' => $profile['profileId'],
-      'nid' => $node->nid,
-      'etag' => $profile['meta']['etag'],
-    );
-    db_merge('cap_api_profiles')
-      ->key(array('profile_id' => $profile['profileId']))
-      ->fields($record)
-      ->execute();
   }
+  // Saving profile<->node association.
+  $record = array(
+    'profile_id' => $profile['profileId'],
+    'nid' => $node->nid,
+    'etag' => $profile['meta']['etag'],
+  );
+  db_merge('cap_api_profiles')
+    ->key(array('profile_id' => $profile['profileId']))
+    ->fields($record)
+    ->execute();
 }
 
 /**
