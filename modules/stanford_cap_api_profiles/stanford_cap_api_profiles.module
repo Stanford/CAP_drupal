@@ -366,15 +366,21 @@ function stanford_cap_api_profiles_node_fields_update($node, $profile) {
     $drupal_field_name = _stanford_cap_api_profiles_get_field_name($field_name, '', TRUE);
     $props_info = $nw->getPropertyInfo();
     if (isset($props_info[$drupal_field_name])) {
-      $hash = db_select('cap_api_field_hashes', 'hashes')
-        ->condition('profile_id', $profile_id)
-        ->condition('field_name', $drupal_field_name)
-        ->fields('hashes', array('hash'))
-        ->execute()
-        ->fetchField();
-      if ($hash == serialize($node->{$drupal_field_name})) {
-        // Field data didn't changed till import, this means we can update it.
-        $nw->{$drupal_field_name}->set(NULL);
+      if (isset($node->{$drupal_field_name})) {
+        $hash = db_select('cap_api_field_hashes', 'hashes')
+          ->condition('profile_id', $profile_id)
+          ->condition('field_name', $drupal_field_name)
+          ->fields('hashes', array('hash'))
+          ->execute()
+          ->fetchField();
+        if ($hash == serialize($node->{$drupal_field_name})) {
+          // Field data didn't changed till import, this means we can update it.
+          $nw->{$drupal_field_name}->set(NULL);
+          _stanford_cap_api_profiles_save_field($node, $nw, $field_name, $field_data);
+        }
+      }
+      else {
+        // We know about this field, but it had no data before.
         _stanford_cap_api_profiles_save_field($node, $nw, $field_name, $field_data);
       }
     }
@@ -1176,8 +1182,10 @@ function _stanford_cap_api_profiles_generate_field_info($drupal_field_name, $fie
  *
  * @param string $type
  *   Field type.
- * @param string $field_name
+ * @param string $drupal_field_name
  *   Drupal field name.
+ * @param string $field_name
+ *   CAP field name.
  * @param array $schema
  *   Field schema form CAP API.
  * @param string $parent_field
@@ -1187,35 +1195,35 @@ function _stanford_cap_api_profiles_generate_field_info($drupal_field_name, $fie
  *   Array used in field_create_instance().
  * @see field_create_instance()
  */
-function _stanford_cap_api_profiles_generate_instance_info($type, $field_name, $schema, $parent_field = '') {
+function _stanford_cap_api_profiles_generate_instance_info($type, $drupal_field_name, $field_name, $schema, $parent_field = '') {
   $info = NULL;
   switch ($type) {
     case 'text':
-      $info = _stanford_cap_api_profiles_gen_field_instance_def_text($field_name, $schema, $parent_field);
+      $info = _stanford_cap_api_profiles_gen_field_instance_def_text($drupal_field_name, $field_name, $schema, $parent_field);
       break;
 
     case 'text_long':
-      $info = _stanford_cap_api_profiles_gen_field_instance_def_text_long($field_name, $schema, $parent_field);
+      $info = _stanford_cap_api_profiles_gen_field_instance_def_text_long($drupal_field_name, $field_name, $schema, $parent_field);
       break;
 
     case 'list_boolean':
-      $info = _stanford_cap_api_profiles_gen_field_instance_def_boolean($field_name, $schema, $parent_field);
+      $info = _stanford_cap_api_profiles_gen_field_instance_def_boolean($drupal_field_name, $field_name, $schema, $parent_field);
       break;
 
     case 'field_collection':
-      $info = _stanford_cap_api_profiles_gen_field_instance_def_field_collection($field_name, $schema, $parent_field);
+      $info = _stanford_cap_api_profiles_gen_field_instance_def_field_collection($drupal_field_name, $field_name, $schema, $parent_field);
       break;
 
     case 'date':
-      $info = _stanford_cap_api_profiles_gen_field_instance_def_date($field_name, $schema, $parent_field);
+      $info = _stanford_cap_api_profiles_gen_field_instance_def_date($drupal_field_name, $field_name, $schema, $parent_field);
       break;
 
     case 'number_integer':
-      $info = _stanford_cap_api_profiles_gen_field_instance_def_integer($field_name, $schema, $parent_field);
+      $info = _stanford_cap_api_profiles_gen_field_instance_def_integer($drupal_field_name, $field_name, $schema, $parent_field);
       break;
 
     case 'taxonomy_term_reference':
-      $info = _stanford_cap_api_profiles_gen_field_instance_def_taxonomy_term_reference($field_name, $schema, $parent_field);
+      $info = _stanford_cap_api_profiles_gen_field_instance_def_taxonomy_term_reference($drupal_field_name, $field_name, $schema, $parent_field);
       break;
   }
 
@@ -1268,7 +1276,7 @@ function _stanford_cap_api_profiles_synchronize_schema_subfields($f_name, $f_sch
     if (!isset($f_schema['weight'])) {
       $f_schema['weight'] = $field_weigth;
     }
-    $field_instance = _stanford_cap_api_profiles_generate_instance_info($field_info['type'], $drupal_field_name, $f_schema, $drupal_parent_field);
+    $field_instance = _stanford_cap_api_profiles_generate_instance_info($field_info['type'], $drupal_field_name, $f_name, $f_schema, $drupal_parent_field);
     if (!empty($field_instance)) {
       // We are in batch mode.
       if (isset($operations)) {
@@ -1524,8 +1532,10 @@ function _stanford_cap_api_profiles_gen_field_base_def_taxonomy_term_reference($
 /**
  * Generate field instance info for boolean field.
  *
- * @param string $field_name
+ * @param string $drupal_field_name
  *   Drupal field name.
+ * @param string $field_name
+ *   CAP field name.
  * @param array $schema
  *   Field schema form CAP API.
  * @param string $parent_field
@@ -1535,17 +1545,17 @@ function _stanford_cap_api_profiles_gen_field_base_def_taxonomy_term_reference($
  *   Array used in field_create_instance().
  * @see field_create_instance()
  */
-function _stanford_cap_api_profiles_gen_field_instance_def_boolean($field_name, $schema, $parent_field) {
+function _stanford_cap_api_profiles_gen_field_instance_def_boolean($drupal_field_name, $field_name, $schema, $parent_field) {
   $entity_type = empty($parent_field) ? 'node' : 'field_collection_item';
   $bundle = empty($parent_field) ? 'cap_stanford_profile' : $parent_field;
-  $label = empty($schema['title']) ? '' : $schema['title'];
+  $label = empty($schema['title']) ? $field_name : $schema['title'];
   $description = empty($schema['description']) ? '' : $schema['description'];
   $weight = isset($schema['weight']) ? $schema['weight'] : 0;
   $instance = array(
     'bundle' => $bundle,
     'description' => $description,
     'entity_type' => $entity_type,
-    'field_name' => $field_name,
+    'field_name' => $drupal_field_name,
     'label' => $label,
     'widget' => array(
       'settings' => array(
@@ -1566,8 +1576,10 @@ function _stanford_cap_api_profiles_gen_field_instance_def_boolean($field_name, 
 /**
  * Generate field instance info for integer field.
  *
- * @param string $field_name
+ * @param string $drupal_field_name
  *   Drupal field name.
+ * @param string $field_name
+ *   CAP field name.
  * @param array $schema
  *   Field schema form CAP API.
  * @param string $parent_field
@@ -1577,10 +1589,10 @@ function _stanford_cap_api_profiles_gen_field_instance_def_boolean($field_name, 
  *   Array used in field_create_instance().
  * @see field_create_instance()
  */
-function _stanford_cap_api_profiles_gen_field_instance_def_integer($field_name, $schema, $parent_field) {
+function _stanford_cap_api_profiles_gen_field_instance_def_integer($drupal_field_name, $field_name, $schema, $parent_field) {
   $entity_type = empty($parent_field) ? 'node' : 'field_collection_item';
   $bundle = empty($parent_field) ? 'cap_stanford_profile' : $parent_field;
-  $label = empty($schema['title']) ? '' : $schema['title'];
+  $label = empty($schema['title']) ? $field_name : $schema['title'];
   $description = empty($schema['description']) ? '' : $schema['description'];
   $weight = isset($schema['weight']) ? $schema['weight'] : 0;
   $instance = array(
@@ -1599,7 +1611,7 @@ function _stanford_cap_api_profiles_gen_field_instance_def_integer($field_name, 
       ),
     ),
     'description' => $description,
-    'field_name' => $field_name,
+    'field_name' => $drupal_field_name,
     'entity_type' => $entity_type,
     'bundle' => $bundle,
     'widget' => array('weight' => $weight),
@@ -1615,8 +1627,10 @@ function _stanford_cap_api_profiles_gen_field_instance_def_integer($field_name, 
 /**
  * Generate field instance info for text field.
  *
- * @param string $field_name
+ * @param string $drupal_field_name
  *   Drupal field name.
+ * @param string $field_name
+ *   CAP field name.
  * @param array $schema
  *   Field schema form CAP API.
  * @param string $parent_field
@@ -1626,10 +1640,10 @@ function _stanford_cap_api_profiles_gen_field_instance_def_integer($field_name, 
  *   Array used in field_create_instance().
  * @see field_create_instance()
  */
-function _stanford_cap_api_profiles_gen_field_instance_def_text($field_name, $schema, $parent_field = '') {
+function _stanford_cap_api_profiles_gen_field_instance_def_text($drupal_field_name, $field_name, $schema, $parent_field = '') {
   $entity_type = empty($parent_field) ? 'node' : 'field_collection_item';
   $bundle = empty($parent_field) ? 'cap_stanford_profile' : $parent_field;
-  $label = empty($schema['title']) ? '' : $schema['title'];
+  $label = empty($schema['title']) ? $field_name : $schema['title'];
   $description = empty($schema['description']) ? '' : $schema['description'];
   $weight = isset($schema['weight']) ? $schema['weight'] : 0;
   $instance = array(
@@ -1637,7 +1651,7 @@ function _stanford_cap_api_profiles_gen_field_instance_def_text($field_name, $sc
     'default_value' => NULL,
     'description' => $description,
     'entity_type' => $entity_type,
-    'field_name' => $field_name,
+    'field_name' => $drupal_field_name,
     'label' => $label,
     'widget' => array('weight' => $weight),
   );
@@ -1652,8 +1666,10 @@ function _stanford_cap_api_profiles_gen_field_instance_def_text($field_name, $sc
 /**
  * Generate field instance info for text_long field.
  *
- * @param string $field_name
+ * @param string $drupal_field_name
  *   Drupal field name.
+ * @param string $field_name
+ *   CAP field name.
  * @param array $schema
  *   Field schema form CAP API.
  * @param string $parent_field
@@ -1663,17 +1679,17 @@ function _stanford_cap_api_profiles_gen_field_instance_def_text($field_name, $sc
  *   Array used in field_create_instance().
  * @see field_create_instance()
  */
-function _stanford_cap_api_profiles_gen_field_instance_def_text_long($field_name, $schema, $parent_field = '') {
+function _stanford_cap_api_profiles_gen_field_instance_def_text_long($drupal_field_name, $field_name, $schema, $parent_field = '') {
   $entity_type = empty($parent_field) ? 'node' : 'field_collection_item';
   $bundle = empty($parent_field) ? 'cap_stanford_profile' : $parent_field;
-  $label = empty($schema['title']) ? '' : $schema['title'];
+  $label = empty($schema['title']) ? $field_name : $schema['title'];
   $description = empty($schema['description']) ? '' : $schema['description'];
   $weight = isset($schema['weight']) ? $schema['weight'] : 0;
   $instance = array(
     'bundle' => $bundle,
     'description' => $description,
     'entity_type' => $entity_type,
-    'field_name' => $field_name,
+    'field_name' => $drupal_field_name,
     'label' => $label,
     'settings' => array(
       'text_processing' => TRUE,
@@ -1691,8 +1707,10 @@ function _stanford_cap_api_profiles_gen_field_instance_def_text_long($field_name
 /**
  * Generate field instance info for field collection field.
  *
- * @param string $field_name
+ * @param string $drupal_field_name
  *   Drupal field name.
+ * @param string $field_name
+ *   CAP field name.
  * @param array $schema
  *   Field schema form CAP API.
  * @param string $parent_field
@@ -1702,17 +1720,17 @@ function _stanford_cap_api_profiles_gen_field_instance_def_text_long($field_name
  *   Array used in field_create_instance().
  * @see field_create_instance()
  */
-function _stanford_cap_api_profiles_gen_field_instance_def_field_collection($field_name, $schema, $parent_field = '') {
+function _stanford_cap_api_profiles_gen_field_instance_def_field_collection($drupal_field_name, $field_name, $schema, $parent_field = '') {
   $entity_type = empty($parent_field) ? 'node' : 'field_collection_item';
   $bundle = empty($parent_field) ? 'cap_stanford_profile' : $parent_field;
-  $label = empty($schema['title']) ? '' : $schema['title'];
+  $label = empty($schema['title']) ? $field_name : $schema['title'];
   $description = empty($schema['description']) ? '' : $schema['description'];
   $weight = isset($schema['weight']) ? $schema['weight'] : 0;
   $instance = array(
     'bundle' => $bundle,
     'description' => $description,
     'entity_type' => $entity_type,
-    'field_name' => $field_name,
+    'field_name' => $drupal_field_name,
     'label' => $label,
     'display' => array(
       'default' => array(
@@ -1745,8 +1763,10 @@ function _stanford_cap_api_profiles_gen_field_instance_def_field_collection($fie
 /**
  * Generate field instance info for date field.
  *
- * @param string $field_name
+ * @param string $drupal_field_name
  *   Drupal field name.
+ * @param string $field_name
+ *   CAP field name.
  * @param array $schema
  *   Field schema form CAP API.
  * @param string $parent_field
@@ -1756,10 +1776,10 @@ function _stanford_cap_api_profiles_gen_field_instance_def_field_collection($fie
  *   Array used in field_create_instance().
  * @see field_create_instance()
  */
-function _stanford_cap_api_profiles_gen_field_instance_def_date($field_name, $schema, $parent_field = '') {
+function _stanford_cap_api_profiles_gen_field_instance_def_date($drupal_field_name, $field_name, $schema, $parent_field = '') {
   $entity_type = empty($parent_field) ? 'node' : 'field_collection_item';
   $bundle = empty($parent_field) ? 'cap_stanford_profile' : $parent_field;
-  $label = empty($schema['title']) ? '' : $schema['title'];
+  $label = empty($schema['title']) ? $field_name : $schema['title'];
   $description = empty($schema['description']) ? '' : $schema['description'];
   $weight = isset($schema['weight']) ? $schema['weight'] : 0;
   $instance = array(
@@ -1786,7 +1806,7 @@ function _stanford_cap_api_profiles_gen_field_instance_def_date($field_name, $sc
       'user_register_form' => FALSE,
     ),
     'description' => $description,
-    'field_name' => $field_name,
+    'field_name' => $drupal_field_name,
     'entity_type' => $entity_type,
     'bundle' => $bundle,
   );
@@ -1801,8 +1821,10 @@ function _stanford_cap_api_profiles_gen_field_instance_def_date($field_name, $sc
 /**
  * Generate field instance info for taxonomy_term_reference field.
  *
- * @param string $field_name
+ * @param string $drupal_field_name
  *   Drupal field name.
+ * @param string $field_name
+ *   CAP field name.
  * @param array $schema
  *   Field schema form CAP API.
  * @param string $parent_field
@@ -1812,17 +1834,17 @@ function _stanford_cap_api_profiles_gen_field_instance_def_date($field_name, $sc
  *   Array used in field_create_instance().
  * @see field_create_instance()
  */
-function _stanford_cap_api_profiles_gen_field_instance_def_taxonomy_term_reference($field_name, $schema, $parent_field = '') {
+function _stanford_cap_api_profiles_gen_field_instance_def_taxonomy_term_reference($drupal_field_name, $field_name, $schema, $parent_field = '') {
   $entity_type = empty($parent_field) ? 'node' : 'field_collection_item';
   $bundle = empty($parent_field) ? 'cap_stanford_profile' : $parent_field;
-  $label = empty($schema['title']) ? '' : $schema['title'];
+  $label = empty($schema['title']) ? $field_name : $schema['title'];
   $description = empty($schema['description']) ? '' : $schema['description'];
   $weight = isset($schema['weight']) ? $schema['weight'] : 0;
   $instance = array(
     'bundle' => $bundle,
     'description' => $description,
     'entity_type' => $entity_type,
-    'field_name' => $field_name,
+    'field_name' => $drupal_field_name,
     'label' => $label,
     'widget' => array(
       'module' => 'taxonomy',
