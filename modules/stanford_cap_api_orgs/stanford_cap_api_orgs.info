@@ -3,6 +3,7 @@ description = Provides ability to import Stanford University Org Code Hierarchy 
 core = 7.x
 package = Stanford
 project = stanford_cap_api
+dependencies[] = date
 dependencies[] = entity
 dependencies[] = features
 dependencies[] = link
