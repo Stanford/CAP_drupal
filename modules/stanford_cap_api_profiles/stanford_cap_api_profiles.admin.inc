@@ -316,7 +316,7 @@ function stanford_cap_api_profiles_import_form_submit($form, &$form_state) {
     $params['orgAlias'] = check_plain($values['school']);
   }
   if (!empty($values['sunet_id'])) {
-    $params['ids'] = _stanford_cap_api_profiles_prepare_list_str($values['sunet_id']);
+    $params['uids'] = _stanford_cap_api_profiles_prepare_list_str($values['sunet_id']);
   }
 
   $_SESSION['search_params'] = $params;
