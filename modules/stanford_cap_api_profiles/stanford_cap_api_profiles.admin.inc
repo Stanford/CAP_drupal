@@ -171,9 +171,41 @@ function stanford_cap_api_profiles_form_stanford_cap_api_settings_form_alter(&$f
       '#default_value' => variable_get('stanford_cap_api_profile_update', 'nightly'),
       '#options' => array(
         'viewing' => t('When viewing the profile.'),
-        'nightly' => t('Nightly.'),
+        // 'nightly' => t('Nightly.'),
+        'daily'   => t('Daily'),
+       // 'weekly'  => t('Weekly'),   to come later when I have time to punch the keys.
+       // 'monthly' => t('Monthly'),  to come later when I have time to punch the keys.
       ),
     );
+
+    $form['refresh']['stanford_cap_api_profile_update_daily_start'] = array(
+      '#type' => 'textfield',
+      '#title' => t('Sync no earlier than'),
+      '#description' => t('Enter a time. eg: 1:00am or 15:00'),
+      '#default_value' => variable_get('stanford_cap_api_profile_update_daily_start', ''),
+      '#states' => array(
+        'visible' => array(
+          ':input[name="stanford_cap_api_profile_update"]' => array(
+            'value' => 'daily',
+          ),
+        ),
+      ),
+    );
+
+    $form['refresh']['stanford_cap_api_profile_update_daily_end'] = array(
+      '#type' => 'textfield',
+      '#title' => t('Sync no later than'),
+      '#description' => t('Enter a time. eg: 1:00am or 15:00'),
+      '#default_value' => variable_get('stanford_cap_api_profile_update_daily_end', ''),
+      '#states' => array(
+        'visible' => array(
+          ':input[name="stanford_cap_api_profile_update"]' => array(
+            'value' => 'daily',
+          ),
+        ),
+      ),
+    );
+
 
     $form['orphaned'] = array(
       '#type' => 'fieldset',
@@ -193,9 +225,89 @@ function stanford_cap_api_profiles_form_stanford_cap_api_settings_form_alter(&$f
     );
   }
 
+  $form['#validate'][] = 'stanford_cap_api_profiles_settings_form_validate';
   $form['#submit'][25] = 'stanford_cap_api_profiles_settings_form_submit';
   ksort($form['#submit']);
 }
+
+/**
+ * Validates settings form
+ * @return [type] [description]
+ */
+function stanford_cap_api_profiles_settings_form_validate($form, &$form_state) {
+  $values =& $form_state['values'];
+
+  // Check for valid date.
+  if (!empty($values['stanford_cap_api_profile_update_daily_start'])) {
+    if (!_stanford_cap_api_profiles_validate_time($values['stanford_cap_api_profile_update_daily_start'])) {
+      form_set_error('stanford_cap_api_profile_update_daily_start', 'The refresh sync start time is not a valid time format.');
+    }
+  }
+
+  // Check for valid date.
+  if (!empty($values['stanford_cap_api_profile_update_daily_end'])) {
+    if (!_stanford_cap_api_profiles_validate_time($values['stanford_cap_api_profile_update_daily_end'])) {
+      form_set_error('stanford_cap_api_profile_update_daily_end', 'The refresh sync end time is not a valid time format.');
+    }
+  }
+
+  // Check to ensure that both fields are either empty or have values.
+  if (!empty($values['stanford_cap_api_profile_update_daily_start']) && empty($values['stanford_cap_api_profile_update_daily_end'])) {
+    form_set_error('stanford_cap_api_profile_update_daily_end', 'Please enter a maximum time of day.');
+  }
+
+  if (!empty($values['stanford_cap_api_profile_update_daily_end']) && empty($values['stanford_cap_api_profile_update_daily_start'])) {
+    form_set_error('stanford_cap_api_profile_update_daily_start', 'Please enter a minimum time of day.');
+  }
+
+  // If both values are not empty then ensure that the max is greater than the min.
+  if (!empty($values['stanford_cap_api_profile_update_daily_start']) && !empty($values['stanford_cap_api_profile_update_daily_end'])) {
+    $min = $values['stanford_cap_api_profile_update_daily_start'];
+    $max = $values['stanford_cap_api_profile_update_daily_end'];
+
+    // make sure min and max are 24hrs
+    if (stripos($min, "am") || stripos($min, 'pm')) {
+      $min = date("H:i", strtotime($min));
+    }
+
+    if (stripos($max, "am") || stripos($max, 'pm')) {
+      $max = date("H:i", strtotime($max));
+    }
+
+    if ($max <= $min) {
+      form_set_error('stanford_cap_api_profile_update_daily_end', 'Please ensure that the max time of day is greater than the minimum time of day.');
+    }
+
+  }
+
+}
+
+/**
+ * Validates a string for a valid 12 or 24 hr time.
+ * @param  $time [description]
+ * @return boolean true if valid time, false if not.
+ */
+function _stanford_cap_api_profiles_validate_time($time = null) {
+
+  if (is_null($time)) {
+    return FALSE;
+  }
+
+  // 12 hr check.
+  $pattern = "/^" . "(1[0-2]|0?[1-9])" . ":([0-5]?[0-9])" . " ?(AM|PM)" . "$/i";
+  if (preg_match($pattern, $time)) {
+    return true;
+  }
+
+  // 24 hr check.
+  $pattern = "/^" . "([1-2][0-3]|[01]?[1-9]|00)" . ":([0-5]?[0-9])" . "$/i";
+  if (preg_match($pattern, $time)) {
+    return true;
+  }
+
+  return false;
+}
+
 
 /**
  * Submit handler for settings form.
@@ -227,6 +339,8 @@ function stanford_cap_api_profiles_settings_form_submit($form, &$form_state) {
     variable_set('stanford_cap_api_profile_allow_edit', $values['stanford_cap_api_profile_allow_edit']);
     variable_set('cap_stanford_cap_api_profile_orphaned_action', $values['stanford_cap_api_profile_orphaned_action']);
     variable_set('stanford_cap_api_profile_update', $values['stanford_cap_api_profile_update']);
+    variable_set('stanford_cap_api_profile_update_daily_start', $values['stanford_cap_api_profile_update_daily_start']);
+    variable_set('stanford_cap_api_profile_update_daily_end', $values['stanford_cap_api_profile_update_daily_end']);
   }
 }
 
