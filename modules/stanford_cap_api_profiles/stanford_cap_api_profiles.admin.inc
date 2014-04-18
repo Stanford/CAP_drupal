@@ -170,6 +170,7 @@ function stanford_cap_api_profiles_form_stanford_cap_api_settings_form_alter(&$f
       '#title' => t('CAP Profiles can be updated regularly to ensure you have the latest content available for the site:'),
       '#default_value' => variable_get('stanford_cap_api_profile_update', 'nightly'),
       '#options' => array(
+        // @todo Replace with named constants.
         'viewing' => t('When viewing the profile.'),
         'nightly' => t('Nightly.'),
       ),
@@ -185,10 +186,10 @@ function stanford_cap_api_profiles_form_stanford_cap_api_settings_form_alter(&$f
       'nothing' => t('Do nothing. The profile will simply continue to exist on the website.'),
       'remove' => t('Remove it from the site.'),
     );
-    $form['orphaned']['stanford_cap_api_profile_orphaned_action'] = array(
+    $form['orphaned']['stanford_cap_api_profiles_orphaned_action'] = array(
       '#type' => 'radios',
       '#title' => t('When a profile is removed from the CAP API:'),
-      '#default_value' => variable_get('cap_stanford_cap_api_profile_orphaned_action', 'unpublish'),
+      '#default_value' => variable_get('stanford_cap_api_profiles_orphaned_action', 'unpublish'),
       '#options' => $options,
     );
   }
@@ -225,7 +226,7 @@ function stanford_cap_api_profiles_settings_form_submit($form, &$form_state) {
   else {
     variable_set('stanford_cap_api_profile_custom_fields', $values['stanford_cap_api_profile_custom_fields']);
     variable_set('stanford_cap_api_profile_allow_edit', $values['stanford_cap_api_profile_allow_edit']);
-    variable_set('cap_stanford_cap_api_profile_orphaned_action', $values['stanford_cap_api_profile_orphaned_action']);
+    variable_set('stanford_cap_api_profiles_orphaned_action', $values['stanford_cap_api_profiles_orphaned_action']);
     variable_set('stanford_cap_api_profile_update', $values['stanford_cap_api_profile_update']);
   }
 }
@@ -234,6 +235,7 @@ function stanford_cap_api_profiles_settings_form_submit($form, &$form_state) {
  * Form builder for import page.
  */
 function stanford_cap_api_profiles_import_form($form, &$form_state) {
+  drupal_set_title(t('Profile import'));
 
   $form['description'] = array(
     '#type' => 'item',
@@ -316,7 +318,7 @@ function stanford_cap_api_profiles_import_form_submit($form, &$form_state) {
     $params['orgAlias'] = check_plain($values['school']);
   }
   if (!empty($values['sunet_id'])) {
-    $params['ids'] = _stanford_cap_api_profiles_prepare_list_str($values['sunet_id']);
+    $params['uids'] = _stanford_cap_api_profiles_prepare_list_str($values['sunet_id']);
   }
 
   $_SESSION['search_params'] = $params;
@@ -351,6 +353,7 @@ function _stanford_cap_api_profiles_prepare_list_str($str) {
  * Form builder for import result page.
  */
 function stanford_cap_api_profiles_import_result_form($form, &$form_state) {
+  drupal_set_title(t('Profile search results'));
 
   if (!empty($_SESSION['search_response']) && !empty($_SESSION['search_response']['values'])) {
     $form['description_wrapper'] = array(
@@ -519,22 +522,18 @@ function stanford_cap_api_profiles_reset() {
   }
   batch_set(array('operations' => $operations));
   db_delete('cap_api_fields')->execute();
+  db_delete('cap_api_field_hashes')->execute();
+  db_delete('cap_api_fields_map')->execute();
   variable_del('stanford_cap_api_profiles_schema_synchronized');
   variable_del('stanford_cap_api_profiles_schema_hash');
   drupal_set_message(t('Stanford profile content type has being resetted to default.'));
 }
 
 /**
- * Manage profiles page callback.
- */
-function stanford_cap_api_profiles_manage() {
-  return views_embed_view('cap_api_manage_profiles');
-}
-
-/**
  * Groups synchronization from builder.
  */
 function stanford_cap_api_profiles_group_sync_form($form, &$form_state) {
+  drupal_set_title(t('Group import'));
 
   $form['description'] = array(
     '#type' => 'item',
@@ -895,7 +894,7 @@ function _stanford_cap_api_profiles_field_checkboxes($fields, &$parent_elem, $pa
     $field_level = count(explode('.', $field_path));
     $parent_elem[$field_path] = array(
       '#type' => 'checkbox',
-      '#title' => check_plain($f_schema['title']),
+      '#title' => empty($f_schema['title']) ? $f_name : check_plain($f_schema['title']),
       '#description' => empty($f_schema['description']) ? '' : check_plain($f_schema['description']),
       '#return_value' => $field_path,
       '#attributes' => array(

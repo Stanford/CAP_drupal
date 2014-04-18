@@ -9,6 +9,7 @@ include_once 'stanford_cap_api_profiles.admin.inc';
 define('CAP_FIELDS_PREFIX', 'cap_');
 define('CAP_FIELDS_IMPORT_ALL', 'import_all');
 define('CAP_FIELDS_IMPORT_LIST', 'import_list');
+define('CAP_PROFILES_PER_REQUEST', 10);
 
 /**
  * Implements hook_menu().
@@ -36,16 +37,6 @@ function stanford_cap_api_profiles_menu() {
       'access arguments' => array('administer cap api'),
       'file' => 'stanford_cap_api_profiles.admin.inc',
       'type' => MENU_CALLBACK,
-    );
-
-    $items['admin/config/cap/config/manage'] = array(
-      'title' => 'Manage profiles',
-      'description' => 'Provides administrators ability to manage CAP profiles.',
-      'page callback' => 'stanford_cap_api_profiles_manage',
-      'access arguments' => array('administer cap api'),
-      'weight' => 0,
-      'file' => 'stanford_cap_api_profiles.admin.inc',
-      'type' => MENU_LOCAL_TASK,
     );
 
     $items['admin/config/cap/config/group'] = array(
@@ -174,7 +165,7 @@ function stanford_cap_api_profiles_profile_import($profile_id) {
   $stored_metadata = stanford_cap_api_profiles_get_stored_profile_data($profile_id);
   if (empty($etag) && !empty($stored_metadata['etag'])) {
     // Profile is synced, but deleted from CAP.
-    $action = variable_get('cap_stanford_cap_api_profile_orphaned_action', 'unpublish');
+    $action = variable_get('stanford_cap_api_profiles_orphaned_action', 'unpublish');
     switch ($action) {
       case 'unpublish':
         $nid = db_select('cap_api_profiles', 'p')
@@ -316,37 +307,83 @@ function stanford_cap_api_profiles_synchronize_data($profile) {
  */
 function stanford_cap_api_profiles_node_fields_import($node, $profile) {
   $nw = entity_metadata_wrapper('node', $node);
-
   foreach ($profile as $field_name => $field_data) {
     _stanford_cap_api_profiles_save_field($node, $nw, $field_name, $field_data);
   }
-
-  $nw->cap_profile_link->set(array('url' => _stanford_cap_api_profiles_get_cap_profile_url($profile)));
-  $nw->cap_sync_date->set(REQUEST_TIME);
-  // Profile image handling.
-  if (!empty($profile['profilePhotos'])) {
-    $image_type = 'bigger';
-    $fid = _stanford_cap_api_profiles_save_image_file($image_type, $profile['profilePhotos'][$image_type]);
-    if (isset($fid)) {
-      $nw->cap_profile_image = array('fid' => $fid);
-    }
-  }
+  _stanford_cap_api_profiles_fill_basic_fields($nw, $profile);
   $nw->save();
-  $profile_id = $profile['profileId'];
+  _stanford_cap_api_profiles_store_node_field_hashes($profile['profileId'], $node, $nw);
+}
+
+/**
+ * Stores profile node field hashes in DB.
+ *
+ * We storing serialized raw field values for most fields and
+ * entity/revision IDs  array for field colletions because raw()
+ * metadata wrapper method returns full field collection object.
+ * Doesn't use any hashing because we need to deal not only with strings.
+ *
+ * @param int $profile_id
+ * @param object $node
+ * @param object $nw
+ */
+function _stanford_cap_api_profiles_store_node_field_hashes($profile_id, $node, $nw) {
   $bundled_fields = array(
     'cap_profile_link',
     'cap_sync_date',
     'cap_profile_image',
   );
   // Storing profile field hashes to check if data was changed later.
-  foreach ($node as $field_name => $field_data) {
-    if (is_array($field_data) && !in_array($field_name, $bundled_fields)) {
-      $record = array(
+  $props_info = $nw->getPropertyInfo();
+  $fields = field_info_instances('node', 'cap_stanford_profile');
+  foreach ($fields as $field_name => $field_instance) {
+    if (!in_array($field_name, $bundled_fields)) {
+      // Using raw values for all fields, but field_collections, they
+      // return full field_collection object as raw.
+      if ($props_info[$field_name]['type'] == 'field_collection_item') {
+        $hash = $node->{$field_name};
+      }
+      else {
+        $hash = $nw->{$field_name}->raw();
+      }
+      $key = array(
         'profile_id' => $profile_id,
         'field_name' => $field_name,
-        'hash' => $field_data,
       );
-      drupal_write_record('cap_api_field_hashes', $record);
+      $record = $key + array(
+        'hash' => serialize($hash),
+      );
+      db_merge('cap_api_field_hashes')->key($key)->fields($record)->execute();
+    }
+  }
+}
+
+/**
+ * Set basic profile fields value.
+ *
+ * @param object $nw
+ *   Node wrapper object.
+ * @param array $profile
+ *   CAP profile.
+ */
+function _stanford_cap_api_profiles_fill_basic_fields(&$nw, $profile) {
+  $nw->cap_profile_link->set(array('url' => _stanford_cap_api_profiles_get_cap_profile_url($profile)));
+  $nw->cap_sync_date->set(REQUEST_TIME);
+  // Organization relation handling.
+  $org_tid = _stanford_cap_api_profiles_get_orantization_tid($nw, 'short');
+  if (!$org_tid) {
+    // Lets try long title;
+    $org_tid = _stanford_cap_api_profiles_get_orantization_tid($nw, 'long');
+  }
+  if ($org_tid) {
+    $nw->field_cap_profile_organization = $org_tid;
+  }
+  // Profile image handling.
+  if (!empty($profile['profilePhotos'])) {
+    $image_type = 'bigger';
+    $fid = _stanford_cap_api_profiles_save_image_file($image_type, $profile['profilePhotos'][$image_type]);
+    if (isset($fid)) {
+      $nw->cap_profile_image = array('fid' => $fid);
     }
   }
 }
@@ -361,19 +398,27 @@ function stanford_cap_api_profiles_node_fields_import($node, $profile) {
  */
 function stanford_cap_api_profiles_node_fields_update($node, $profile) {
   $nw = entity_metadata_wrapper('node', $node);
+  $props_info = $nw->getPropertyInfo();
   $profile_id = $profile['profileId'];
   foreach ($profile as $field_name => $field_data) {
     $drupal_field_name = _stanford_cap_api_profiles_get_field_name($field_name, '', TRUE);
-    $props_info = $nw->getPropertyInfo();
     if (isset($props_info[$drupal_field_name])) {
       if (isset($node->{$drupal_field_name})) {
-        $hash = db_select('cap_api_field_hashes', 'hashes')
+        $stored_hash = db_select('cap_api_field_hashes', 'hashes')
           ->condition('profile_id', $profile_id)
           ->condition('field_name', $drupal_field_name)
           ->fields('hashes', array('hash'))
           ->execute()
           ->fetchField();
-        if ($hash == serialize($node->{$drupal_field_name})) {
+        // Using raw values for all fields, but field_collections, they
+        // return full field_collection object as raw.
+        if ($props_info[$drupal_field_name]['type'] == 'field_collection_item') {
+          $hash = serialize($node->{$drupal_field_name});
+        }
+        else {
+          $hash = serialize($nw->{$drupal_field_name}->raw());
+        }
+        if ($stored_hash == $hash) {
           // Field data didn't changed till import, this means we can update it.
           $nw->{$drupal_field_name}->set(NULL);
           _stanford_cap_api_profiles_save_field($node, $nw, $field_name, $field_data);
@@ -385,15 +430,9 @@ function stanford_cap_api_profiles_node_fields_update($node, $profile) {
       }
     }
   }
-  $nw->cap_profile_link->set(array('url' => _stanford_cap_api_profiles_get_cap_profile_url($profile)));
-  $nw->cap_sync_date->set(REQUEST_TIME);
-  // Profile image handling.
-  $image_type = 'bigger';
-  $fid = _stanford_cap_api_profiles_save_image_file($image_type, $profile['profilePhotos'][$image_type]);
-  if (isset($fid)) {
-    $nw->cap_profile_image = array('fid' => $fid);
-  }
+  _stanford_cap_api_profiles_fill_basic_fields($nw, $profile);
   $nw->save();
+  _stanford_cap_api_profiles_store_node_field_hashes($profile_id, $node, $nw);
 }
 
 /**
@@ -478,30 +517,60 @@ function stanford_cap_api_profiles_get_stored_profile_data($profile_id) {
  * @see http://www.stanford.edu/dept/pres-provost/budget/org/orgchart/
  */
 function stanford_cap_api_profiles_sync_org_members($org_code, &$operations = NULL) {
-  $count = 0;
   $params = array('orgCodes' => $org_code);
-  // This request used to get count of profiles of this organization.
+
+  return _stanford_cap_api_sync_members($org_code, $operations, $params);
+}
+
+/**
+ * Helper to sync group members.
+ *
+ * @param string $group
+ *   Machine readable group name.
+ * @param array $operations
+ *   Array of operations to use in batch set definition.
+ * @param array $params
+ *   Array of params for stanford_cap_api_request().
+ *
+ * @return int
+ *   Number of synced profiles.
+ *
+ * @see stanford_cap_api_request()
+ */
+function _stanford_cap_api_sync_members($group, &$operations, $params) {
+  $count = 0;
+  // This request used to get count of profiles of this group.
   $data = stanford_cap_api_request('/profiles/v1', $params);
   if ($data && $data['totalCount'] > 0) {
-    $count = $params['ps'] = $data['totalCount'];
-    // Requesting all profiles of organization.
-    $data = stanford_cap_api_request('/profiles/v1', $params);
-    if (!empty($data['values']) && is_array($data['values'])) {
-      foreach ($data['values'] as $profile) {
-        if (isset($operations)) {
-          $operations[] = array(
-            'stanford_cap_api_profiles_profile_import',
-            array($profile['profileId']),
-          );
-        }
-        else {
-          stanford_cap_api_profiles_profile_import($profile['profileId']);
+    $params['ps'] = CAP_PROFILES_PER_REQUEST;
+    $requests_count = $data['totalPages'];
+    for ($i = 0; $i < $requests_count; $i++) {
+      $params['p'] = $i + 1;
+      $data = stanford_cap_api_request('/profiles/v1', $params);
+      if (!empty($data['values']) && is_array($data['values'])) {
+        // Summing up received profiles.
+        $count += count($data['values']);
+        foreach ($data['values'] as $profile) {
+          if (isset($operations)) {
+            $operations[] = array(
+              'stanford_cap_api_profiles_profile_import',
+              array($profile['profileId']),
+            );
+          }
+          else {
+            stanford_cap_api_profiles_profile_import($profile['profileId']);
+          }
         }
       }
+      else {
+        watchdog(
+          'stanford_cap_api_profiles',
+          'There was an issue while retrieving data from CAP service for "@group" group.',
+          array('@group' => $group)
+        );
+      }
     }
-    else {
-      watchdog('stanford_cap_api_profiles', 'There was issue in retrieving data from CAP service for "@org_code" organization.', array('@org_code' => $org_code));
-    }
+
   }
 
   return $count;
@@ -520,33 +589,9 @@ function stanford_cap_api_profiles_sync_org_members($org_code, &$operations = NU
  *   Count of synced profiles.
  */
 function stanford_cap_api_profiles_sync_workgroup_members($workgroup_id, &$operations = NULL) {
-  $count = 0;
   $params = array('privGroups' => $workgroup_id);
-  // This request used to get count of profiles of this organization.
-  $data = stanford_cap_api_request('/profiles/v1', $params);
-  if ($data && $data['totalCount'] > 0) {
-    $count = $params['ps'] = $data['totalCount'];
-    // Requesting all profiles of organization.
-    $data = stanford_cap_api_request('/profiles/v1', $params);
-    if (!empty($data['values']) && is_array($data['values'])) {
-      foreach ($data['values'] as $profile) {
-        if (isset($operations)) {
-          $operations[] = array(
-            'stanford_cap_api_profiles_profile_import',
-            array($profile['profileId']),
-          );
-        }
-        else {
-          stanford_cap_api_profiles_profile_import($profile['profileId']);
-        }
-      }
-    }
-    else {
-      watchdog('stanford_cap_api_profiles', 'There was issue in retrieving data from CAP service for "@workgroup" workgroup.', array('@workgroup' => $workgroup_id));
-    }
-  }
 
-  return $count;
+  return _stanford_cap_api_sync_members($workgroup_id, $operations, $params);
 }
 
 /**
@@ -833,6 +878,23 @@ function _stanford_cap_api_profiles_get_field_name($field_name, $parent = '', $f
 }
 
 /**
+ * Helper to get stored field info by field path.
+ *
+ * @param string $field_path
+ *   Field path from layout schema.
+ *
+ * @return array
+ *   Stored field info.
+ */
+function _stanford_cap_api_profiles_get_field_info_by_path($field_path) {
+  return db_select('cap_api_fields_map', 'm')
+    ->fields('m')
+    ->condition('field_path', $field_path)
+    ->execute()
+    ->fetchAssoc();
+}
+
+/**
  * Save CAP profile field value.
  *
  * @param object $entity
@@ -1028,7 +1090,9 @@ function _stanford_cap_api_profiles_save_field(&$entity, &$wrapper, $field_name,
         break;
     }
   }
-  else {
+  elseif (variable_get('stanford_cap_api_import_profile_fields', CAP_FIELDS_IMPORT_ALL) == CAP_FIELDS_IMPORT_ALL) {
+    // Let's log an issue when we want to import all fields, but this field
+    // doesn't exists in Drupal.
     $message = 'Field "@field" was in profile, but were not defined in schema. Field data: @data';
     $vars = array(
       '@field' => $field_name,
@@ -1248,8 +1312,14 @@ function _stanford_cap_api_profiles_generate_instance_info($type, $drupal_field_
 function _stanford_cap_api_profiles_synchronize_schema_subfields($f_name, $f_schema, $drupal_parent_field = '', $parent_field = '', &$operations = NULL) {
   $field_weigth =& drupal_static(__FUNCTION__, 0);
   $field_path = empty($parent_field) ? $f_name : $parent_field . '.' . $f_name;
-  // Generate Drupal compliant field name.
-  $drupal_field_name = _stanford_cap_api_profiles_get_field_name($f_name, $parent_field);
+  $cap_field_info = _stanford_cap_api_profiles_get_field_info_by_path($field_path);
+  if (empty($cap_field_info['field_name'])) {
+    // Generate Drupal compliant field name.
+    $drupal_field_name = _stanford_cap_api_profiles_get_field_name($f_name, $parent_field);
+  }
+  else {
+    $drupal_field_name = $cap_field_info['field_name'];
+  }
   $field_info = field_info_field($drupal_field_name);
   if (empty($field_info) && stanford_cap_api_profiles_synchronize_field($field_path)) {
     $field_info = _stanford_cap_api_profiles_generate_field_info($drupal_field_name, $f_name, $f_schema, $field_path);
@@ -1455,6 +1525,12 @@ function _stanford_cap_api_profiles_gen_field_base_def_boolean($field_name, $fie
     'cardinality' => $cardinality,
     'field_name' => $field_name,
     'type' => 'list_boolean',
+    'settings' => array(
+      'allowed_values' => array(
+        0 => t('No'),
+        1 => t('Yes'),
+      ),
+    ),
   );
 }
 
@@ -1961,6 +2037,7 @@ function _stanford_cap_api_profiles_save_image_file($field_name, $field_data) {
     return NULL;
   }
   else {
+    // @todo Add check is file exists and size is same, other way we will multiple DB file entries every sync.
     $file_dir = 'cap_profile_images';
     $path = 'public://'
       . $file_dir
@@ -2116,4 +2193,59 @@ function stanford_cap_api_profiles_library() {
   );
 
   return $libraries;
+}
+
+/**
+ * Figure out organization term id from title field.
+ *
+ * @param object $nw
+ *   Node wrapper object.
+ *
+ * @param string $title_type
+ *   From which title field organization should be taken.
+ *   Available options are 'short' and 'long'.
+ *
+ * @return int
+ *   Organization taxonomy term ID.
+ */
+function _stanford_cap_api_profiles_get_orantization_tid($nw, $title_type = 'short') {
+  $tid = NULL;
+  switch ($title_type) {
+    case 'short':
+      $node_field = 'cap_shorttitle';
+      $field_path = 'shortTitle.organization.orgCode';
+      break;
+
+    case 'long':
+      $node_field = 'cap_longtitle';
+      $field_path = 'longTitle.organization.orgCode';
+      break;
+
+    default:
+      return;
+  }
+  $field_info = _stanford_cap_api_profiles_get_field_info_by_path($field_path);
+  $title = $nw->{$node_field}->value();
+  if ($title) {
+    $org = $nw->{$node_field}->{$field_info['bundle']}->value();
+    if ($org) {
+      $term = $nw->{$node_field}->{$field_info['bundle']}->{$field_info['field_name']}->value();
+      if ($term) {
+        $tid = $nw->{$node_field}->{$field_info['bundle']}->{$field_info['field_name']}->tid->value();
+      }
+    }
+  }
+
+  return $tid;
+}
+
+/**
+ * Implements hook_views_default_views_alter().
+ *
+ * Disables 'Manage profiles' view if profiles schema not synchronized yet.
+ */
+function stanford_cap_api_profiles_views_default_views_alter(&$views) {
+  if (!variable_get('stanford_cap_api_profiles_schema_synchronized', FALSE) && isset($views['cap_api_manage_profiles'])) {
+    $views['cap_api_manage_profiles']->disabled = TRUE;
+  }
 }
