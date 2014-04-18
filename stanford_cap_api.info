@@ -2,4 +2,3 @@ name = Stanford CAP API
 description = Provide ability to access Stanford CAP API.
 core = 7.x
 package = Stanford
-project = stanford_cap_api

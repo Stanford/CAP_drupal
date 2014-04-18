@@ -2,7 +2,6 @@ name = Stanford CAP API organizations
 description = Provides ability to import Stanford University Org Code Hierarchy as taxonomy tree.
 core = 7.x
 package = Stanford
-project = stanford_cap_api
 dependencies[] = date
 dependencies[] = entity
 dependencies[] = features

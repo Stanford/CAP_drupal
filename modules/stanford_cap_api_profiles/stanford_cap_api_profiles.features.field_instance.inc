@@ -10,50 +10,6 @@
 function stanford_cap_api_profiles_field_default_field_instances() {
   $field_instances = array();
 
-  // Exported field_instance: 'node-cap_stanford_profile-body'
-  $field_instances['node-cap_stanford_profile-body'] = array(
-    'bundle' => 'cap_stanford_profile',
-    'default_value' => NULL,
-    'deleted' => 0,
-    'description' => '',
-    'display' => array(
-      'default' => array(
-        'label' => 'hidden',
-        'module' => 'text',
-        'settings' => array(),
-        'type' => 'text_default',
-        'weight' => 0,
-      ),
-      'teaser' => array(
-        'label' => 'hidden',
-        'module' => 'text',
-        'settings' => array(
-          'trim_length' => 600,
-        ),
-        'type' => 'text_summary_or_trimmed',
-        'weight' => 0,
-      ),
-    ),
-    'entity_type' => 'node',
-    'field_name' => 'body',
-    'label' => 'Body',
-    'required' => FALSE,
-    'settings' => array(
-      'display_summary' => TRUE,
-      'text_processing' => 1,
-      'user_register_form' => FALSE,
-    ),
-    'widget' => array(
-      'module' => 'text',
-      'settings' => array(
-        'rows' => 20,
-        'summary_rows' => 5,
-      ),
-      'type' => 'text_textarea_with_summary',
-      'weight' => 31,
-    ),
-  );
-
   // Exported field_instance: 'node-cap_stanford_profile-cap_profile_image'
   $field_instances['node-cap_stanford_profile-cap_profile_image'] = array(
     'bundle' => 'cap_stanford_profile',
@@ -223,11 +179,57 @@ function stanford_cap_api_profiles_field_default_field_instances() {
     ),
   );
 
+  // Exported field_instance: 'node-cap_stanford_profile-field_cap_profile_organization'
+  $field_instances['node-cap_stanford_profile-field_cap_profile_organization'] = array(
+    'bundle' => 'cap_stanford_profile',
+    'default_value' => NULL,
+    'deleted' => 0,
+    'description' => '',
+    'display' => array(
+      'default' => array(
+        'label' => 'above',
+        'module' => 'taxonomy',
+        'settings' => array(),
+        'type' => 'taxonomy_term_reference_link',
+        'weight' => 4,
+      ),
+      'full' => array(
+        'label' => 'above',
+        'settings' => array(),
+        'type' => 'hidden',
+        'weight' => 0,
+      ),
+      'teaser' => array(
+        'label' => 'above',
+        'settings' => array(),
+        'type' => 'hidden',
+        'weight' => 0,
+      ),
+    ),
+    'entity_type' => 'node',
+    'field_name' => 'field_cap_profile_organization',
+    'label' => 'CAP profile organization',
+    'required' => 0,
+    'settings' => array(
+      'user_register_form' => FALSE,
+    ),
+    'widget' => array(
+      'active' => 0,
+      'module' => 'taxonomy',
+      'settings' => array(
+        'autocomplete_path' => 'taxonomy/autocomplete',
+        'size' => 60,
+      ),
+      'type' => 'taxonomy_autocomplete',
+      'weight' => 44,
+    ),
+  );
+
   // Translatables
   // Included for use with string extractors like potx.
-  t('Body');
   t('CAP profile image');
   t('CAP profile link');
+  t('CAP profile organization');
   t('Date last synced');
 
   return $field_instances;

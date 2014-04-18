@@ -226,6 +226,15 @@ function stanford_cap_api_profiles_views_default_views() {
   $handler->display->display_options['filters']['type']['value'] = array(
     'cap_stanford_profile' => 'cap_stanford_profile',
   );
+
+  /* Display: Page */
+  $handler = $view->new_display('page', 'Page', 'page_1');
+  $handler->display->display_options['path'] = 'admin/config/cap/config/manage';
+  $handler->display->display_options['menu']['type'] = 'tab';
+  $handler->display->display_options['menu']['title'] = 'Manage profiles';
+  $handler->display->display_options['menu']['weight'] = '0';
+  $handler->display->display_options['menu']['context'] = 0;
+  $handler->display->display_options['menu']['context_only_inline'] = 0;
   $export['cap_api_manage_profiles'] = $view;
 
   return $export;
