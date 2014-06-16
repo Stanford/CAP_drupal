@@ -142,6 +142,13 @@ function stanford_cap_api_profiles_schema() {
         'not null' => FALSE,
         'unsigned' => TRUE,
       ),
+      'sync_children' => array(
+        'description' => 'Flag indicating to import all the profiles in organization and any of its children.',
+        'type' => 'int',
+        'size' => 'tiny',
+        'not null' => TRUE,
+        'default' => 0,
+      ),
     ),
     'primary key' => array('id', 'name'),
   );
@@ -192,4 +199,21 @@ function stanford_cap_api_profiles_enable() {
     $fields_list[] = trim($field);
   }
   variable_set('stanford_cap_api_profiles_text_fields_list', array_filter($fields_list));
+}
+
+/**
+ * Implements hook_update_N().
+ *
+ * Add sync_children column to cap_api_sync_groups table.
+ */
+function stanford_cap_api_profiles_update_7001() {
+  db_add_field('cap_api_sync_groups', 'sync_children',
+    array(
+      'description' => 'Flag indicating to import all the profiles in organization and any of its children.',
+      'type' => 'int',
+      'size' => 'tiny',
+      'not null' => TRUE,
+      'default' => 0,
+    )
+  );
 }

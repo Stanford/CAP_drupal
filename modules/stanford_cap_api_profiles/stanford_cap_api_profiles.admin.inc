@@ -263,6 +263,12 @@ function stanford_cap_api_profiles_import_form($form, &$form_state) {
     '#default_value' => '',
     '#autocomplete_path' => 'stanford-cap-api-org-autocomplete',
   );
+  $form['organization_include_child'] = array(
+    '#type' => 'checkbox',
+    '#title' => t('Include child organizations'),
+    '#default_value' => '',
+    '#description' => t('Enable it to retrieve all the members from child organizations.'),
+  );
 
   $link = l(t('at the workgroup manager website.'), 'https://workgroup.stanford.edu');
   $form['workgroup'] = array(
@@ -307,6 +313,9 @@ function stanford_cap_api_profiles_import_form_submit($form, &$form_state) {
     $term_wrapper = entity_metadata_wrapper('taxonomy_term', _stanford_cap_api_profiles_get_term_tid($values['organization']));
     $org_codes = $term_wrapper->field_org_codes->value();
     $params['orgCodes'] = implode(',', $org_codes);
+    if (!empty($values['organization_include_child'])) {
+      $params['includeChildren'] = TRUE;
+    }
   }
   if (!empty($values['workgroup'])) {
     $params['privGroups'] = _stanford_cap_api_profiles_prepare_list_str($values['workgroup']);
@@ -593,6 +602,13 @@ function stanford_cap_api_profiles_group_sync_form($form, &$form_state) {
       '#autocomplete_path' => 'stanford-cap-api-org-autocomplete',
     );
 
+    $form['new_group']['organization_include_children'] = array(
+      '#type' => 'checkbox',
+      '#title' => t('Include child organizations'),
+      '#default_value' => '',
+      '#description' => t('Enable it to retrieve all the members from child organizations.'),
+    );
+
     $link = l(t('at the workgroup manager website'), 'https://workgroup.stanford.edu');
     $form['new_group']['workgroup'] = array(
       '#type' => 'textfield',
@@ -622,6 +638,8 @@ function stanford_cap_api_profiles_group_sync_form($form, &$form_state) {
       '#tree' => TRUE,
     );
 
+    $include_child_orgs = 0;
+
     foreach ($group_types as $group_type) {
       switch ($group_type) {
         case 'organization':
@@ -634,6 +652,10 @@ function stanford_cap_api_profiles_group_sync_form($form, &$form_state) {
           if (!empty($org_codes)) {
             $name = implode(',', $org_codes);
           }
+
+          $include_child_orgs = empty($form_state['values']['organization_include_children']) ? 0
+            : $form_state['values']['organization_include_children'];
+
           break;
 
         default:
@@ -641,7 +663,9 @@ function stanford_cap_api_profiles_group_sync_form($form, &$form_state) {
           break;
       }
       if (!empty($name)) {
-        $count = _stanford_cap_api_profiles_get_group_profiles_count($group_type, $name);
+        $api_request_ext_params = (empty($include_child_orgs)) ? array() : array('includeChildren' => TRUE);
+        $count = _stanford_cap_api_profiles_get_group_profiles_count($group_type, $name, $api_request_ext_params);
+
         $label = check_plain($name);
         if ($group_type == 'organization') {
           $label = $term_wrapper->name->value();
@@ -653,6 +677,11 @@ function stanford_cap_api_profiles_group_sync_form($form, &$form_state) {
         );
       }
     }
+
+    $form['groups_to_save']['organization_include_children'] = array(
+      '#type' => 'value',
+      '#value' => $include_child_orgs,
+    );
 
     $form['groups']['groups_list'] = array(
       '#type' => 'tableselect',
@@ -682,13 +711,14 @@ function stanford_cap_api_profiles_group_sync_form_submit($form, &$form_state) {
       if (isset($form_state['values']['groups_to_save'][$group_type])) {
         $group_name = $form_state['values']['groups_to_save'][$group_type];
         $count = 0;
+        $include_children = $form_state['values']['groups_to_save']['organization_include_children'];
         $operations[] = array(
           'stanford_cap_api_profiles_sync_group_save',
-          array($group_type, $group_name, NULL, NULL),
+          array($group_type, $group_name, NULL, NULL, $include_children),
         );
         switch ($group_type) {
           case 'organization':
-            $count = stanford_cap_api_profiles_sync_org_members($group_name, $operations);
+            $count = stanford_cap_api_profiles_sync_org_members($group_name, $operations, $include_children);
             break;
 
           case 'workgroup':
@@ -697,7 +727,7 @@ function stanford_cap_api_profiles_group_sync_form_submit($form, &$form_state) {
         }
         $operations[] = array(
           '_stanford_cap_api_profiles_sync_group_save_wrapper',
-          array($group_type, $group_name, $count),
+          array($group_type, $group_name, $count, $include_children),
         );
       }
     }
@@ -717,31 +747,33 @@ function stanford_cap_api_profiles_group_sync_form_submit($form, &$form_state) {
  *   Group type.
  * @param string $name
  *   Group name.
+ * @param array $params
+ *   Additional API request arguments.
  *
  * @return int
  *   Number of profiles in this group.
  */
-function _stanford_cap_api_profiles_get_group_profiles_count($type, $name) {
+function _stanford_cap_api_profiles_get_group_profiles_count($type, $name, $params = array()) {
   $count = 0;
   switch ($type) {
     case 'organization':
-      $params = array('orgCodes' => $name);
-      $data = stanford_cap_api_request('/profiles/v1', $params);
-      if ($data) {
-        $count = $data['totalCount'];
-      }
+      $params = array_merge(array('orgCodes' => $name), $params);
       break;
 
     case 'workgroup':
-      $params = array('privGroups' => $name);
-      $data = stanford_cap_api_request('/profiles/v1', $params);
-      if ($data) {
-        $count = $data['totalCount'];
-      }
+      $params = array_merge(array('privGroups' => $name), $params);
       break;
 
     case 'school':
-      break;
+      return;
+
+    default:
+      return;
+  }
+
+  $data = stanford_cap_api_request('/profiles/v1', $params);
+  if ($data) {
+    $count = $data['totalCount'];
   }
 
   return $count;
@@ -779,11 +811,11 @@ function stanford_cap_api_profiles_group_sync_now($id) {
   $count = 0;
   $operations[] = array(
     'stanford_cap_api_profiles_sync_group_save',
-    array($group['type'], $group['name'], NULL, NULL),
+    array($group['type'], $group['name'], NULL, NULL, $group['sync_children']),
   );
   switch ($group['type']) {
     case 'organization':
-      $count = stanford_cap_api_profiles_sync_org_members($group['name'], $operations);
+      $count = stanford_cap_api_profiles_sync_org_members($group['name'], $operations, $group['sync_children']);
       break;
 
     case 'workgroup':
@@ -792,7 +824,7 @@ function stanford_cap_api_profiles_group_sync_now($id) {
   }
   $operations[] = array(
     '_stanford_cap_api_profiles_sync_group_save_wrapper',
-    array($group['type'], $group['name'], $count),
+    array($group['type'], $group['name'], $count, $group['sync_children']),
   );
 
   $batch = array(
