@@ -142,16 +142,45 @@ function stanford_cap_api_profiles_user_access($permission, $node_type) {
  * Implements hook_cron().
  */
 function stanford_cap_api_profiles_cron() {
-  // Run cron tasks between 1 and 5 hours.
+
+  // Allowed configuration options.
+  $allowed = array('daily', 'nightly');
+  $type = variable_get('stanford_cap_api_profile_update', 'donotsync!');
+  if (!in_array($type, $allowed)) {
+    return;
+  }
+
   $tz = variable_get('date_default_timezone');
   $date = new DateObject('now', $tz);
-  $hour_of_day = (int) $date->format('G');
-  if ($hour_of_day >= 1 && $hour_of_day <= 5) {
-    stanford_cap_api_profiles_synchronize_schema();
-    stanford_cap_api_profiles_update_profiles();
-    stanford_cap_api_profiles_sync_group_cron();
-    variable_set('stanford_cap_api_profiles_cron_last_run', REQUEST_TIME);
+  $time_of_day = $date->format('H:i');
+  $min = variable_get('stanford_cap_api_profile_update_daily_start', '01:00');
+  $max = variable_get('stanford_cap_api_profile_update_daily_end', '05:00');
+
+  // make sure min and max are 24hrs
+  if (stripos($min, "am") || stripos($min, 'pm')) {
+    $min = date("H:i", strtotime($min));
   }
+
+  if (stripos($max, "am") || stripos($max, 'pm')) {
+    $max = date("H:i", strtotime($max));
+  }
+
+  if ($time_of_day >= $min && $time_of_day <= $max) {
+    _stanford_cap_api_profiles_execute_cron();
+  }
+
+}
+
+/**
+ * The functions to run after cron conditions are met.
+ * @return [type] [description]
+ */
+function _stanford_cap_api_profiles_execute_cron() {
+  watchdog('stanford_cap_api_profiles', 'Cron sync profiles ran.', NULL, WATCHDOG_INFO);
+  stanford_cap_api_profiles_synchronize_schema();
+  stanford_cap_api_profiles_update_profiles();
+  stanford_cap_api_profiles_sync_group_cron();
+  variable_set('stanford_cap_api_profiles_cron_last_run', REQUEST_TIME);
 }
 
 /**
