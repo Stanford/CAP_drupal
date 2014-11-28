@@ -22,6 +22,9 @@ function stanford_cap_api_profiles_views_api($module = NULL, $api = NULL) {
 
 /**
  * Implements hook_node_info().
+ *
+ * @todo: Replace features based content type creation with hook_install.
+ * This will allow to avoid features to become overridden after fields get synced.
  */
 function stanford_cap_api_profiles_node_info() {
   $items = array(

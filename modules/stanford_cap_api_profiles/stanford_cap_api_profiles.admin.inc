@@ -170,7 +170,6 @@ function stanford_cap_api_profiles_form_stanford_cap_api_settings_form_alter(&$f
       '#title' => t('CAP Profiles can be updated regularly to ensure you have the latest content available for the site:'),
       '#default_value' => variable_get('stanford_cap_api_profile_update', 'nightly'),
       '#options' => array(
-        // @todo Replace with named constants.
         'viewing' => t('When viewing the profile.'),
         'nightly' => t('Nightly.'),
       ),
@@ -190,6 +189,28 @@ function stanford_cap_api_profiles_form_stanford_cap_api_settings_form_alter(&$f
       '#type' => 'radios',
       '#title' => t('When a profile is removed from the CAP API:'),
       '#default_value' => variable_get('stanford_cap_api_profiles_orphaned_action', 'unpublish'),
+      '#options' => $options,
+    );
+
+    $form['filter'] = array(
+      '#type' => 'fieldset',
+      '#title' => t('Filter profiles by type'),
+    );
+
+    $options = array(
+      'capFaculty' => t('Faculty'),
+      'capMdStudent' => t('MD Student'),
+      'capMsStudent' => t('MS Student'),
+      'capPhdStudent' => t('PHD Student'),
+      'capPostdoc' => t('Postdoc'),
+      'capStaff' => t('Staff'),
+      'physician' => t('Physician'),
+    );
+
+    $form['filter']['stanford_cap_api_profiles_filter'] = array(
+      '#type' => 'checkboxes',
+      '#title' => t('Only import profiles of the specified types:'),
+      '#default_value' => stanford_cap_api_profiles_get_filters(),
       '#options' => $options,
     );
   }
@@ -228,6 +249,7 @@ function stanford_cap_api_profiles_settings_form_submit($form, &$form_state) {
     variable_set('stanford_cap_api_profile_allow_edit', $values['stanford_cap_api_profile_allow_edit']);
     variable_set('stanford_cap_api_profiles_orphaned_action', $values['stanford_cap_api_profiles_orphaned_action']);
     variable_set('stanford_cap_api_profile_update', $values['stanford_cap_api_profile_update']);
+    variable_set('stanford_cap_api_profiles_filter', $values['stanford_cap_api_profiles_filter']);
   }
 }
 
@@ -481,7 +503,6 @@ function stanford_cap_api_profiles_import_result_form($form, &$form_state) {
  * Submit handler for import result form.
  */
 function stanford_cap_api_profiles_import_result_form_submit($form, &$form_state) {
-
   if (empty($form_state['values']['profiles'])) {
     drupal_set_message(t('Nothing to import. Profiles list is empty.'));
   }
@@ -489,53 +510,82 @@ function stanford_cap_api_profiles_import_result_form_submit($form, &$form_state
     if (!variable_get('stanford_cap_api_profiles_schema_synchronized', FALSE)) {
       stanford_cap_api_profiles_synchronize_schema(TRUE);
     }
-    $profiles = $form_state['values']['profiles'];
-    $operations = array();
-    foreach ($profiles as $profile) {
-      if ($profile != 0) {
-        $operations[] = array(
-          'stanford_cap_api_profiles_profile_import',
-          array($profile),
-        );
-      }
-    }
-
-    $batch = array(
-      'title' => t('Importing profiles'),
-      'operations' => $operations,
-      'progress_message' => t('Current: @current | Remaining: @remaining | Total: @total | Estimate: @estimate | Elapsed: @elapsed'),
-      'finished' => 'stanford_cap_api_profiles_import_result_finished',
-    );
+    $profile_ids = $form_state['values']['profiles'];
+    $batch = stanford_cap_api_profiles_import_batch($profile_ids);
+    $batch['finished'] = 'stanford_cap_api_profiles_import_result_finished';
     batch_set($batch);
   }
 }
 
 /**
  * Remove all CAP profile fields from system.
+ *
+ * @param bool $batch
+ *   Set this if run with devel.
  */
-function stanford_cap_api_profiles_reset() {
+function stanford_cap_api_profiles_reset($batch = FALSE) {
   $fields = db_select('cap_api_fields', 'f')->fields('f', array('field_name'))
     ->execute()->fetchCol();
-  $operations = array();
-  foreach ($fields as $field) {
-    if (field_read_field($field)) {
-      $operations[] = array(
-        'field_delete_field',
-        array($field),
-      );
-      $operations[] = array(
-        'field_purge_batch',
-        array(1),
-      );
+
+  if ($batch) {
+    $operations = array();
+    foreach ($fields as $field) {
+      if (field_read_field($field)) {
+        $operations[] = array(
+          'field_delete_field',
+          array($field),
+        );
+      }
+    }
+    batch_set(array('operations' => $operations));
+  }
+  else {
+    foreach ($fields as $field) {
+      field_delete_field($field);
     }
   }
-  batch_set(array('operations' => $operations));
+
   db_delete('cap_api_fields')->execute();
   db_delete('cap_api_field_hashes')->execute();
   db_delete('cap_api_fields_map')->execute();
   variable_del('stanford_cap_api_profiles_schema_synchronized');
   variable_del('stanford_cap_api_profiles_schema_hash');
   drupal_set_message(t('Stanford profile content type has being resetted to default.'));
+}
+
+/**
+ * Removes all Stanford cap profiles from system.
+ *
+ * Calls stanford_cap_api_profiles_reset() before real removing to
+ * speed up the process.
+ *
+ * @param bool $batch
+ *   Set this if run with devel.
+ *
+ * @see stanford_cap_api_profiles_reset()
+ */
+function stanford_cap_api_profiles_remove($batch = FALSE) {
+  $nids = db_select('node', 'n')
+    ->condition('type', 'cap_stanford_profile')
+    ->fields('n', array('nid'))
+    ->execute()
+    ->fetchCol();
+  if ($batch) {
+    $operations = array();
+    stanford_cap_api_profiles_reset($batch);
+    foreach ($nids as $nid) {
+      $operations[] = array(
+        'node_delete',
+        array($nid),
+      );
+    }
+    batch_set(array('operations' => $operations));
+  }
+  else {
+    stanford_cap_api_profiles_reset($batch);
+    node_delete_multiple($nids);
+  }
+  drupal_set_message(t('Stanford profiles was removed from system.'));
 }
 
 /**
@@ -572,7 +622,8 @@ function stanford_cap_api_profiles_group_sync_form($form, &$form_state) {
       $sync_link = l(t('Sync now'), 'admin/config/cap/config/group/' . $group->id . '/sync');
       $rows[] = array(
         check_plain($group->name),
-        t('%count profiles', array('%count' => $group->count)),
+        t('%count profiles !include_child',
+          array('%count' => $group->count, '!include_child' => ($group->sync_children) ? '(includes child orgs)' : '')),
         $group->lastsynced ? format_date($group->lastsynced, 'long') : t('Never'),
         $delete_link . ' | ' . $sync_link,
       );
@@ -706,37 +757,17 @@ function stanford_cap_api_profiles_group_sync_form_submit($form, &$form_state) {
     $form_state['rebuild'] = TRUE;
   }
   if (isset($form_state['values']['groups_list'])) {
-    $operations = array();
     foreach ($form_state['values']['groups_list'] as $group_type) {
       if (isset($form_state['values']['groups_to_save'][$group_type])) {
-        $group_name = $form_state['values']['groups_to_save'][$group_type];
-        $count = 0;
-        $include_children = $form_state['values']['groups_to_save']['organization_include_children'];
-        $operations[] = array(
-          'stanford_cap_api_profiles_sync_group_save',
-          array($group_type, $group_name, NULL, NULL, $include_children),
+        $group = array(
+          'name' => $form_state['values']['groups_to_save'][$group_type],
+          'type' => $group_type,
+          'sync_children' => $form_state['values']['groups_to_save']['organization_include_children'],
         );
-        switch ($group_type) {
-          case 'organization':
-            $count = stanford_cap_api_profiles_sync_org_members($group_name, $operations, $include_children);
-            break;
-
-          case 'workgroup':
-            $count = stanford_cap_api_profiles_sync_workgroup_members($group_name, $operations);
-            break;
-        }
-        $operations[] = array(
-          '_stanford_cap_api_profiles_sync_group_save_wrapper',
-          array($group_type, $group_name, $count, $include_children),
-        );
+        $batch = stanford_cap_api_profiles_groups_import_batch($group);
+        batch_set($batch);
       }
     }
-    $batch = array(
-      'title' => t('Synchronizing group profiles'),
-      'operations' => $operations,
-      'progress_message' => t('Current: @current | Remaining: @remaining | Total: @total | Estimate: @estimate | Elapsed: @elapsed'),
-    );
-    batch_set($batch);
   }
 }
 
@@ -807,31 +838,8 @@ function stanford_cap_api_profiles_group_sync_now($id) {
     ->fields('groups')
     ->execute()
     ->fetchAssoc();
-  $operations = array();
-  $count = 0;
-  $operations[] = array(
-    'stanford_cap_api_profiles_sync_group_save',
-    array($group['type'], $group['name'], NULL, NULL, $group['sync_children']),
-  );
-  switch ($group['type']) {
-    case 'organization':
-      $count = stanford_cap_api_profiles_sync_org_members($group['name'], $operations, $group['sync_children']);
-      break;
 
-    case 'workgroup':
-      $count = stanford_cap_api_profiles_sync_workgroup_members($group['name'], $operations);
-      break;
-  }
-  $operations[] = array(
-    '_stanford_cap_api_profiles_sync_group_save_wrapper',
-    array($group['type'], $group['name'], $count, $group['sync_children']),
-  );
-
-  $batch = array(
-    'title' => t('Synchronizing group profiles'),
-    'operations' => $operations,
-    'progress_message' => t('Current: @current | Remaining: @remaining | Total: @total | Estimate: @estimate | Elapsed: @elapsed'),
-  );
+  $batch = stanford_cap_api_profiles_groups_import_batch($group);
   batch_set($batch);
   batch_process('admin/config/cap/config/group');
 }

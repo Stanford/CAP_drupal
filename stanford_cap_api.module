@@ -171,8 +171,10 @@ function stanford_cap_api_auth($user = '', $pass = '', $auth_uri = '') {
  *
  * @param string $endpoint
  *   Endpoint string.
+ *
  * @param array $params
  *   Additional parameters for request.
+ *
  * @param bool $raw
  *   Indicates in which form data should be returned, case TRUE JSON will be
  * returned, array otherwise.
@@ -181,22 +183,9 @@ function stanford_cap_api_auth($user = '', $pass = '', $auth_uri = '') {
  *   Decoded JSON response or FALSE.
  */
 function stanford_cap_api_request($endpoint, $params = array(), $raw = FALSE) {
-  $api_base = variable_get('stanford_cap_api_base_url', 'https://api.stanford.edu');
+  $response = stanford_cap_api_raw_request($endpoint, $params = array());
+  $request_url = stanford_cap_api_request_url($endpoint, $params);
 
-  $access_token = stanford_cap_api_auth();
-  // Unable to fetch an auth token.
-  if (empty($access_token)) {
-    return FALSE;
-  }
-
-  $params['access_token'] = $access_token;
-
-  $request_url = url($api_base . $endpoint, array(
-    'query' => $params,
-    'external' => TRUE,
-  ));
-
-  $response = drupal_http_request($request_url);
   // Error could be here as well.
   if (property_exists($response, 'error')) {
     $error_msg = 'Failed to fetch data from CAP API service. Error code is'
@@ -211,7 +200,7 @@ function stanford_cap_api_request($endpoint, $params = array(), $raw = FALSE) {
     return FALSE;
   }
 
-  // Log bad API authentication.
+  // Convert JSON response to an array.
   $data = json_decode($response->data, TRUE);
   if (empty($data)) {
     // JSON from response cannot be decoded.
@@ -250,22 +239,24 @@ function stanford_cap_api_request($endpoint, $params = array(), $raw = FALSE) {
     }
     $message .= ' Request string was "%request".';
     $vars = array('%request' => $request_url);
-    watchdog('stanford_cap_api', $message, $vars, WATCHDOG_WARNING);
+    watchdog('stanford_cap_api', $message, $vars, WATCHDOG_ERROR);
 
     return FALSE;
   }
   else {
+    // CAP API handled error.
     if (array_key_exists('error', $data)) {
       $error_msg = 'Error found in CAP API response. Error message is "%msg", response data was "%data".';
       $vars = array(
         '%msg' => $data['error_description'],
         '%data' => print_r($data, TRUE),
       );
-      watchdog('stanford_cap_api', $error_msg, $vars, WATCHDOG_WARNING);
+      watchdog('stanford_cap_api', $error_msg, $vars, WATCHDOG_ERROR);
 
       return FALSE;
     }
     else {
+      // Success.
       if ($raw) {
         return $response->data;
       }
@@ -274,6 +265,57 @@ function stanford_cap_api_request($endpoint, $params = array(), $raw = FALSE) {
       }
     }
   }
+}
+
+/**
+ * Issue an raw API call against an API endpoint.
+ *
+ * @param string $endpoint
+ *   Endpoint string.
+ *
+ * @param array $params
+ *   Additional parameters for request.
+ *
+ * @return array
+ *   Raw response.
+ */
+function stanford_cap_api_raw_request($endpoint, $params = array()) {
+  $request_url = stanford_cap_api_request_url($endpoint, $params);
+
+  return drupal_http_request($request_url, array('timeout' => 120));
+}
+
+/**
+ * Returns request url.
+ *
+ * @param string $endpoint
+ *   Endpoint string.
+ *
+ * @param array $params
+ *   Additional parameters for request.
+ *
+ * @return array
+ *   Request URL.
+ */
+function stanford_cap_api_request_url($endpoint, $params = array()) {
+  $api_base = variable_get('stanford_cap_api_base_url', 'https://api.stanford.edu');
+
+  $access_token = stanford_cap_api_auth();
+  // Unable to fetch an auth token.
+  if (empty($access_token)) {
+    return FALSE;
+  }
+
+  $params['access_token'] = $access_token;
+
+  if (strpos($endpoint, '/') !== 0) {
+    $endpoint = '/' . $endpoint;
+  }
+
+  return url($api_base . $endpoint, array(
+    'query' => $params,
+    'external' => TRUE,
+  ));
 }
 
 /**

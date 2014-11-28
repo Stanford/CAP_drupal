@@ -93,8 +93,10 @@ function stanford_cap_api_profiles_schema() {
       ),
       'etag' => array(
         'description' => 'Etag.',
-        'type' => 'int',
+        'type' => 'varchar',
+        'length' => 32,
         'not null' => TRUE,
+        'default' => '',
       ),
       'sync' => array(
         'description' => 'Does this profile needs to be synced?',
@@ -183,6 +185,30 @@ function stanford_cap_api_profiles_schema() {
     'primary key' => array('id', 'profile_id'),
   );
 
+  $schema['cap_api_import_cache'] = array(
+    'description' => 'Stores downloaded data during batch or queued import before it\'s beed imported.',
+    'fields' => array(
+      'cid' => array(
+        'description' => 'Record ID.',
+        'type' => 'serial',
+        'unsigned' => TRUE,
+        'not null' => TRUE,
+      ),
+      'importer' => array(
+        'description' => 'Importer using the record.',
+        'type' => 'varchar',
+        'length' => 128,
+      ),
+      'data' => array(
+        'type' => 'text',
+        'size' => 'big',
+        'description' => 'Raw JSON response from CAP.',
+        'not null' => TRUE,
+      ),
+    ),
+    'primary key' => array('cid'),
+  );
+
   return $schema;
 }
 
@@ -216,4 +242,50 @@ function stanford_cap_api_profiles_update_7001() {
       'default' => 0,
     )
   );
+}
+
+/**
+ * Implements hook_update_N().
+ *
+ * Add cap_api_import_cache table for stanford_cap_api_profiles module.
+ */
+function stanford_cap_api_profiles_update_7002() {
+  db_create_table('cap_api_import_cache', drupal_get_schema_unprocessed('stanford_cap_api_profiles', 'cap_api_import_cache'));
+  return 'Add cap_api_import_cache table for stanford_cap_api_profiles module.';
+}
+
+/**
+ * Implements hook_update_N().
+ *
+ * Update field 'data' schema.
+ */
+function stanford_cap_api_profiles_update_7003() {
+  $table = 'cap_api_import_cache';
+  $field = 'data';
+  $schema = array(
+    'type' => 'text',
+    'size' => 'big',
+    'description' => 'Raw JSON response from CAP.',
+    'not null' => TRUE,
+  );
+
+  db_change_field($table, $field, $field, $schema);
+}
+
+/**
+ * Implements hook_update_N().
+ *
+ * Update field 'etag' schema.
+ */
+function stanford_cap_api_profiles_update_7004() {
+  $table = 'cap_api_profiles';
+  $field = 'etag';
+  $schema = array(
+    'type' => 'varchar',
+    'length' => 32,
+    'not null' => TRUE,
+    'default' => '',
+  );
+
+  db_change_field($table, $field, $field, $schema);
 }

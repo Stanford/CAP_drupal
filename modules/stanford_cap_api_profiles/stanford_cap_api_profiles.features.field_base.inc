@@ -6,6 +6,9 @@
 
 /**
  * Implements hook_field_default_field_bases().
+ *
+ * @todo: Replace features based fields creation with hook_install.
+ * This will allow to avoid features to become overridden after fields get synced.
  */
 function stanford_cap_api_profiles_field_default_field_bases() {
   $field_bases = array();

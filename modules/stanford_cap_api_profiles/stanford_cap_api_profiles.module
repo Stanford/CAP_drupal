@@ -6,10 +6,13 @@
 
 include_once 'stanford_cap_api_profiles.features.inc';
 include_once 'stanford_cap_api_profiles.admin.inc';
+include_once 'stanford_cap_api_profiles.batch.inc';
 define('CAP_FIELDS_PREFIX', 'cap_');
 define('CAP_FIELDS_IMPORT_ALL', 'import_all');
 define('CAP_FIELDS_IMPORT_LIST', 'import_list');
 define('CAP_PROFILES_PER_REQUEST', 10);
+define('CAP_PROFILES_PROFILE_FAILED', 'failed');
+define('CAP_PROFILES_PROFILE_NOT_EXIST', 'not_exist');
 
 /**
  * Implements hook_menu().
@@ -157,65 +160,95 @@ function stanford_cap_api_profiles_cron() {
 /**
  * Import CAP profile.
  *
+ * @param int|array $profile
+ *   Profile ID or profile data array.
+ */
+function stanford_cap_api_profiles_profile_import($profile) {
+  $profile_id = (is_array($profile)) ? $profile['profileId'] : $profile;
+
+  // Checking filter settings, if this profile is allowed to be imported.
+  if (stanford_cap_api_profiles_profile_import_forbidden($profile_id)) {
+    // Treat this profile like an orphan.
+    stanford_cap_api_profiles_profile_orphaned($profile_id);
+    return;
+  }
+
+  $etag = stanford_cap_api_profiles_get_profile_etag($profile_id);
+  $stored_metadata = stanford_cap_api_profiles_get_stored_profile_data($profile_id);
+  if ($etag == CAP_PROFILES_PROFILE_NOT_EXIST && !empty($stored_metadata['etag'])) {
+    // Profile exists in Drupal, but should no longer be synced.
+    stanford_cap_api_profiles_profile_orphaned($profile_id);
+  }
+  elseif (!empty($stored_metadata['etag']) && empty($stored_metadata['sync'])) {
+    // Do nothing, we have synced flag off.
+  }
+  elseif ($etag != CAP_PROFILES_PROFILE_FAILED && (empty($stored_metadata['etag']) || $etag != $stored_metadata['etag'])) {
+    // Profile not stored or updated.
+    if (!is_array($profile)) {
+      $profile = stanford_cap_api_profiles_get_profile($profile_id);
+    }
+    if ($profile) {
+      stanford_cap_api_profiles_synchronize_schema();
+      stanford_cap_api_profiles_synchronize_data($profile);
+    }
+  }
+}
+
+/**
+ * Handle an orphaned profile by unpublishing or deleting it.
+ *
  * @param int $profile_id
  *   Profile ID.
  */
-function stanford_cap_api_profiles_profile_import($profile_id) {
-  try {
-    $etag = stanford_cap_api_profiles_get_profile_etag($profile_id);
-    $stored_metadata = stanford_cap_api_profiles_get_stored_profile_data($profile_id);
-    if (empty($etag) && !empty($stored_metadata['etag'])) {
-      // Profile is synced, but deleted from CAP.
-      $action = variable_get('stanford_cap_api_profiles_orphaned_action', 'unpublish');
-      switch ($action) {
-        case 'unpublish':
-          $nid = db_select('cap_api_profiles', 'p')
-            ->condition('profile_id', $profile_id)
-            ->fields('p', array('nid'))
-            ->execute()
-            ->fetchField();
-          $node = node_load($nid);
-          $node->status = NODE_NOT_PUBLISHED;
-          node_save($node);
-          db_delete('cap_api_profiles')
-            ->condition('nid', $nid)
-            ->execute();
-          break;
+function stanford_cap_api_profiles_profile_orphaned($profile_id) {
+  // Look up the action to be applied to orphaned profiles.
+  $action = variable_get('stanford_cap_api_profiles_orphaned_action', 'unpublish');
+  switch ($action) {
+    case 'unpublish':
+      stanford_cap_api_profiles_profile_unpublish($profile_id);
+      break;
 
-        case 'remove':
-          $nid = db_select('cap_api_profiles', 'p')
-            ->condition('profile_id', $profile_id)
-            ->fields('p', array('nid'))
-            ->execute()
-            ->fetchField();
-          node_delete($nid);
-          break;
-      }
-    }
-    elseif (!empty($stored_metadata['etag']) && empty($stored_metadata['sync'])) {
-      // Do nothing, we have synced flag off.
-    }
-    elseif (empty($stored_metadata['etag']) || $etag != $stored_metadata['etag']) {
-      // Profile not stored or updated.
-      $profile = stanford_cap_api_profiles_get_profile($profile_id);
-      if ($profile) {
-        if (!variable_get('stanford_cap_api_profiles_schema_synchronized', FALSE)) {
-          stanford_cap_api_profiles_synchronize_schema();
-        }
-        stanford_cap_api_profiles_synchronize_data($profile);
-      }
-    }
-
-  } catch (Exception $e) {
-    $callstack = $e->getTrace();
-    $menu_handler_call_step = $callstack[count($callstack) - 2];
-    if ($menu_handler_call_step['args'][0] == 'system_batch_page') {
-      watchdog('stanford_cap_api_profiles', 'Exception while profile @profile_id import. '.$e->getMessage(), array('@profile_id' => $profile['profileId']), WATCHDOG_ERROR);
-    }
-    else {
-      throw new Exception('Exception while profile '. $profile['profileId'] .' import. '.$e->getMessage(), NULL, $e);
-    }
+    case 'remove':
+      stanford_cap_api_profiles_profile_delete($profile_id);
+      break;
   }
+}
+
+/**
+ * Unpublish a CAP profile.
+ *
+ * @param int $profile_id
+ *   Profile ID.
+ */
+function stanford_cap_api_profiles_profile_unpublish($profile_id) {
+  $nid = db_select('cap_api_profiles', 'p')
+    ->condition('profile_id', $profile_id)
+    ->fields('p', array('nid'))
+    ->execute()
+    ->fetchField();
+  $node = node_load($nid);
+  $node->status = NODE_NOT_PUBLISHED;
+  node_save($node);
+
+  // Prevent further interaction with the profile by this module.
+  db_delete('cap_api_profiles')
+    ->condition('nid', $nid)
+    ->execute();
+}
+
+/**
+ * Delete a CAP profile.
+ *
+ * @param int $profile_id
+ *   Profile ID.
+ */
+function stanford_cap_api_profiles_profile_delete($profile_id) {
+  $nid = db_select('cap_api_profiles', 'p')
+    ->condition('profile_id', $profile_id)
+    ->fields('p', array('nid'))
+    ->execute()
+    ->fetchField();
+  node_delete($nid);
 }
 
 /**
@@ -223,17 +256,21 @@ function stanford_cap_api_profiles_profile_import($profile_id) {
  *
  * @param string $profile_id
  *   Profile ID.
+ * @param bool $raw
+ *   Indicates in which form data should be returned, case TRUE JSON will be
+ * returned, array otherwise.
  *
  * @return array|FALSE
  *   Profile or FALSE.
  */
-function stanford_cap_api_profiles_get_profile($profile_id) {
+function stanford_cap_api_profiles_get_profile($profile_id, $raw = FALSE) {
   $cache =& drupal_static(__FUNCTION__, array());
-  if (empty($cache[$profile_id])) {
-    $cache[$profile_id] = stanford_cap_api_request('/profiles/v1/' . $profile_id);
+  $type = $raw ? 'json' : 'php';
+  if (empty($cache[$profile_id]) || empty($cache[$profile_id][$type])) {
+    $cache[$profile_id][$type] = stanford_cap_api_request('/profiles/v1/' . $profile_id, NULL, $raw);
   }
 
-  return $cache[$profile_id];
+  return $cache[$profile_id][$type];
 }
 
 /**
@@ -325,9 +362,15 @@ function stanford_cap_api_profiles_node_fields_import($node, $profile) {
     }
     _stanford_cap_api_profiles_fill_basic_fields($nw, $profile);
     $nw->save();
-  } catch (EntityMetadataWrapperException $e) {
-    throw new Exception(t('EntityMetadataWrapper Exception while syncing profile @profile_id to @id @entity_type. Exception message: '.$e->getMessage(),
-      array('@profile_id' => $profile['profileId'], '@id' => $nw->getIdentifier(), '@entity_type' => $nw->type())));
+  }
+  catch (EntityMetadataWrapperException $e) {
+    $vars = array(
+      '@message' => $e->getMessage(),
+      '@profile_id' => $profile['profileId'],
+      '@id' => $nw->getIdentifier(),
+      '@entity_type' => $nw->type(),
+    );
+    throw new Exception(t('EntityMetadataWrapper Exception while syncing profile @profile_id to @id @entity_type. Exception message: @message', $vars));
   }
 
   _stanford_cap_api_profiles_store_node_field_hashes($profile['profileId'], $node, $nw);
@@ -358,7 +401,8 @@ function _stanford_cap_api_profiles_store_node_field_hashes($profile_id, $node, 
     if (!in_array($field_name, $bundled_fields)) {
       // Using raw values for all fields, but field_collections, they
       // return full field_collection object as raw.
-      if ($props_info[$field_name]['type'] == 'field_collection_item') {
+      $field_info = field_info_field($field_name);
+      if ($field_info['type'] == 'field_collection') {
         $hash = $node->{$field_name};
       }
       else {
@@ -397,12 +441,9 @@ function _stanford_cap_api_profiles_fill_basic_fields(EntityDrupalWrapper &$nw, 
     $nw->field_cap_profile_organization = $org_tid;
   }
   // Profile image handling.
-  if (!empty($profile['profilePhotos'])) {
-    $image_type = 'bigger';
-    $fid = _stanford_cap_api_profiles_save_image_file($image_type, $profile['profilePhotos'][$image_type]);
-    if (isset($fid)) {
-      $nw->cap_profile_image = array('fid' => $fid);
-    }
+  $fid = _stanford_cap_api_profiles_save_image_file($profile);
+  if (isset($fid)) {
+    $nw->cap_profile_image = array('fid' => $fid);
   }
 }
 
@@ -422,6 +463,7 @@ function stanford_cap_api_profiles_node_fields_update($node, $profile) {
     $drupal_field_name = _stanford_cap_api_profiles_get_field_name($field_name, '', TRUE);
     if (isset($props_info[$drupal_field_name])) {
       if (isset($node->{$drupal_field_name})) {
+        $field_info = field_info_field($drupal_field_name);
         $stored_hash = db_select('cap_api_field_hashes', 'hashes')
           ->condition('profile_id', $profile_id)
           ->condition('field_name', $drupal_field_name)
@@ -430,7 +472,7 @@ function stanford_cap_api_profiles_node_fields_update($node, $profile) {
           ->fetchField();
         // Using raw values for all fields, but field_collections, they
         // return full field_collection object as raw.
-        if ($props_info[$drupal_field_name]['type'] == 'field_collection_item') {
+        if ($field_info['type'] == 'field_collection') {
           $hash = serialize($node->{$drupal_field_name});
         }
         else {
@@ -438,7 +480,36 @@ function stanford_cap_api_profiles_node_fields_update($node, $profile) {
         }
         if ($stored_hash == $hash) {
           // Field data didn't changed till import, this means we can update it.
+          // Field collections need special handling.
+          if ($field_info['type'] == 'field_collection') {
+            // We are dropping field collections instead of updating them
+            // because it's much simpler, that's why we need to clean up garbage.
+            $ids_2_drop = array();
+            switch ($field_info['cardinality']) {
+              case '1':
+                $ids_2_drop[] = $nw->{$drupal_field_name}->getIdentifier();
+                break;
+
+              default:
+                foreach ($nw->{$drupal_field_name}->getIterator() as $fc) {
+                  $ids_2_drop[] = $fc->getIdentifier();
+                }
+                break;
+            }
+          }
+
           $nw->{$drupal_field_name}->set(NULL);
+
+          // Field collections need special handling.
+          if ($field_info['type'] == 'field_collection') {
+            foreach (field_collection_item_load_multiple($ids_2_drop) as $fc_id => $fc) {
+              $fc->delete();
+              $table = _field_sql_storage_revision_tablename($field_info);
+              db_delete($table)
+                ->condition($drupal_field_name . '_value', $fc_id)
+                ->execute();
+            }
+          }
           _stanford_cap_api_profiles_save_field($node, $nw, $field_name, $field_data);
         }
       }
@@ -452,12 +523,15 @@ function stanford_cap_api_profiles_node_fields_update($node, $profile) {
   try {
     _stanford_cap_api_profiles_fill_basic_fields($nw, $profile);
     $nw->save();
-  } catch (EntityMetadataWrapperException $e) {
-    throw new Exception(t('EntityMetadataWrapper Exception while syncing profile @profile_id to @id @entity_type. Exception message: '.$e->getMessage(),
-      array('@profile_id' => $profile['profileId'], '@id' => $nw->getIdentifier(), '@entity_type' => $nw->type())));
-
-
-
+  }
+  catch (EntityMetadataWrapperException $e) {
+    $vars = array(
+      '@message' => $e->getMessage(),
+      '@profile_id' => $profile['profileId'],
+      '@id' => $nw->getIdentifier(),
+      '@entity_type' => $nw->type(),
+    );
+    throw new Exception(t('EntityMetadataWrapper Exception while syncing profile @profile_id to @id @entity_type. Exception message: @message', $vars));
   }
 
   _stanford_cap_api_profiles_store_node_field_hashes($profile_id, $node, $nw);
@@ -500,9 +574,29 @@ function stanford_cap_api_profiles_update_profiles() {
 function stanford_cap_api_profiles_get_profile_etag($profile_id) {
   $etag = FALSE;
   if (is_numeric($profile_id)) {
-    $profile = stanford_cap_api_profiles_get_profile($profile_id);
-    if ($profile && isset($profile['meta']['etag'])) {
-      $etag = $profile['meta']['etag'];
+    $response = stanford_cap_api_raw_request('/profiles/v1/' . $profile_id, NULL);
+    switch ($response->code) {
+      case 200:
+        $profile = json_decode($response->data, TRUE);
+        if (!empty($profile['meta']['etag'])) {
+          $etag = $profile['meta']['etag'];
+        }
+        else {
+          $etag = CAP_PROFILES_PROFILE_FAILED;
+        }
+        break;
+
+      case 404:
+        $etag = CAP_PROFILES_PROFILE_NOT_EXIST;
+        break;
+
+      case 500:
+        $etag = CAP_PROFILES_PROFILE_FAILED;
+        break;
+
+      default:
+        $etag = CAP_PROFILES_PROFILE_FAILED;
+        break;
     }
   }
 
@@ -777,7 +871,8 @@ function stanford_cap_api_profiles_synchronize_schema($batch = FALSE) {
   }
   $schema = stanford_cap_api_profiles_get_profile_schema();
   $stored_schema_hash = variable_get('stanford_cap_api_profiles_schema_hash');
-  if (!variable_get('stanford_cap_api_profiles_schema_synchronized') || $stored_schema_hash != _stanford_cap_api_profiles_schema_hash($schema)) {
+  // Update schema if hash is changed or not synced yet.
+  if ($stored_schema_hash != _stanford_cap_api_profiles_schema_hash($schema) || !variable_get('stanford_cap_api_profiles_schema_synchronized', FALSE)) {
     // Basic check that we have an expected schema.
     if (is_array($schema) && $schema['type'] == 'object' && !empty($schema['properties'])) {
       foreach ($schema['properties'] as $f_name => $f_schema) {
@@ -812,11 +907,14 @@ function stanford_cap_api_profiles_synchronize_schema($batch = FALSE) {
 /**
  * Get schema for profile type.
  *
+ * @param bool $raw
+ *   Marks that schema must be returned as JSON string.
+ *
  * @return array
  *   Profile type schema.
  */
-function stanford_cap_api_profiles_get_profile_schema() {
-  return stanford_cap_api_request('/cap/v1/schemas/profile');
+function stanford_cap_api_profiles_get_profile_schema($raw = FALSE) {
+  return stanford_cap_api_request('/cap/v1/schemas/profile', NULL, $raw);
 }
 
 /**
@@ -846,8 +944,6 @@ function _stanford_cap_api_profiles_log_field($field_name) {
 /**
  * Generates CAP network profile URL.
  *
- * @todo Remove this when appropriate field would be available.
- *
  * @param array $profile
  *   CAP network profile.
  *
@@ -855,26 +951,17 @@ function _stanford_cap_api_profiles_log_field($field_name) {
  *   CAP network profile URL.
  */
 function _stanford_cap_api_profiles_get_cap_profile_url($profile) {
-  $href = '';
-  if (isset($profile['meta']) && !empty($profile['meta']['links'])) {
-    foreach ($profile['meta']['links'] as $link) {
-      // Searching for public link.
-      if ($link['rel'] == 'https://cap.stanford.edu/rel/public') {
-        $href = $link['href'];
-        break;
-      }
+  $url = variable_get('stanford_cap_uri', 'https://profiles.stanford.edu');
+
+  if (!empty($profile['alias'])) {
+    if (drupal_substr($url, -1) != '/') {
+      $url .= '/';
     }
-  }
-  if (empty($href)) {
-    // Fallback.
-    // Public profile link not found, lets generate it.
-    $href = variable_get('stanford_cap_uri', 'https://profiles-beta.stanford.edu/');
-    if (!empty($profile['alias'])) {
-      $href .= $profile['alias'];
-    }
+
+    $url .= $profile['alias'];
   }
 
-  return $href;
+  return $url;
 }
 
 /**
@@ -948,15 +1035,10 @@ function _stanford_cap_api_profiles_save_field(&$entity, &$wrapper, $field_name,
 
   $drupal_field_name = _stanford_cap_api_profiles_get_field_name($field_name, $parent_field, TRUE);
   $props_info = $wrapper->getPropertyInfo();
-  if (isset($props_info[$drupal_field_name])) {
+  $field_path = empty($parent_field) ? $field_name : $parent_field . '.' . $field_name;
+  if (isset($props_info[$drupal_field_name]) && stanford_cap_api_profiles_synchronize_field($field_path)) {
     $field_info = field_info_field($drupal_field_name);
     switch ($field_info['type']) {
-      case 'link':
-        if (is_string($field_data)) {
-          $wrapper->{$drupal_field_name}->set(array('url' => $field_data));
-        }
-        break;
-
       case 'date':
         if (is_string($field_data)) {
           $wrapper->{$drupal_field_name}->set(strtotime($field_data));
@@ -983,12 +1065,15 @@ function _stanford_cap_api_profiles_save_field(&$entity, &$wrapper, $field_name,
               $values[] = _stanford_cap_api_profiles_get_field_value_text($field_name, $f_data, $field_info);
             }
             else {
-              $error_msg = 'Field name: @field_name. Expecting string , got: @data.';
+              $error_msg = 'Field name: @field_name. Expecting string , got: @data. Additional info: entity ID - @eid, entity type - @type, entity bundle - @bundle.';
               $vars = array(
                 '@field_name' => $field_name,
-                '@data' => print_r($field_data, TRUE),
+                '@data' => is_null($f_data) ? 'NULL' : print_r($f_data, TRUE),
+                '@eid' => $wrapper->getIdentifier(),
+                '@type' => $wrapper->type(),
+                '@bundle' => $wrapper->getBundle(),
               );
-              watchdog('stanford_cap_api_profiles', $error_msg, $vars, WATCHDOG_WARNING);
+              watchdog('stanford_cap_api_profiles', $error_msg, $vars, WATCHDOG_ERROR);
             }
           }
           $wrapper->{$drupal_field_name}->set($values);
@@ -1076,7 +1161,6 @@ function _stanford_cap_api_profiles_save_field(&$entity, &$wrapper, $field_name,
             $fc_item = entity_create('field_collection_item', array('field_name' => $drupal_field_name));
             $entity_type = method_exists($entity, 'entityType') ? 'field_collection_item' : 'node';
             $fc_item->setHostEntity($entity_type, $entity);
-            $fc_item->save(TRUE);
             $fc_wrapper = entity_metadata_wrapper('field_collection_item', $fc_item);
             foreach ($field_data as $fc_subfield => $fc_subfield_data) {
               $field_path = empty($parent_field) ? $field_name : $parent_field . '.' . $field_name;
@@ -1085,44 +1169,6 @@ function _stanford_cap_api_profiles_save_field(&$entity, &$wrapper, $field_name,
             $fc_item->save(TRUE);
           }
         }
-        break;
-
-      case 'image':
-        $ext = drupal_substr($field_data['contentType'], 6);
-        // @todo Remove before release.
-        $request_url = str_replace('cap-irt-dev', 'med', $field_data['url']);
-        parse_str(parse_url($field_data['url'], PHP_URL_QUERY), $query);
-        $profile_id = $query['facultyId'];
-
-        $response = drupal_http_request($request_url);
-        if (property_exists($response, 'error')) {
-          $error_msg = 'Failed to fetch profile image of field %field_name for profile'
-            . ' %profile_id . Error code is'
-            . ' %code, error message is "%msg", request string was "%request".';
-          $vars = array(
-            '%code' => $response->code,
-            '%msg' => $response->status_message,
-            '%request' => $request_url,
-            '%profile_id' => $profile_id,
-            '%field_name' => $field_name,
-          );
-          watchdog('stanford_cap_api_profiles', $error_msg, $vars, WATCHDOG_WARNING);
-
-          break;
-        }
-        $path = 'public://'
-          . variable_get('cap_profile_photos', 'profile_photos')
-          . '/profile_'
-          . $profile_id . '_' . $field_data['type'] . '.' . $ext;
-        $dir = drupal_dirname($path);
-        if (!is_dir($dir) && !mkdir($dir)) {
-          watchdog('stanford_cap_api_profiles', 'Failed to create directory %dir', array('%dir' => $dir), WATCHDOG_WARNING);
-
-          break;
-        }
-        $file = file_save_data($response->data, $path, FILE_EXISTS_REPLACE);
-        $wrapper->{$drupal_field_name}->set(array('fid' => $file->fid));
-
         break;
     }
   }
@@ -1175,7 +1221,7 @@ function _stanford_cap_api_profiles_get_field_value_text($field_name, $field_dat
 }
 
 /**
- * Generate field info based in field schema.
+ * Generate field info based on field schema.
  *
  * @param string $drupal_field_name
  *   Generated Drupal field name.
@@ -1346,7 +1392,7 @@ function _stanford_cap_api_profiles_generate_instance_info($type, $drupal_field_
  *   for batch mode.
  */
 function _stanford_cap_api_profiles_synchronize_schema_subfields($f_name, $f_schema, $drupal_parent_field = '', $parent_field = '', &$operations = NULL) {
-  $field_weigth =& drupal_static(__FUNCTION__, 0);
+  $field_weight =& drupal_static(__FUNCTION__, 0);
   $field_path = empty($parent_field) ? $f_name : $parent_field . '.' . $f_name;
   $cap_field_info = _stanford_cap_api_profiles_get_field_info_by_path($field_path);
   if (empty($cap_field_info['field_name'])) {
@@ -1380,7 +1426,7 @@ function _stanford_cap_api_profiles_synchronize_schema_subfields($f_name, $f_sch
   $field_instance = field_info_instance($parent_entity, $drupal_field_name, $parent_entity_bundle);
   if (empty($field_instance) && !empty($field_info)) {
     if (!isset($f_schema['weight'])) {
-      $f_schema['weight'] = $field_weigth;
+      $f_schema['weight'] = $field_weight;
     }
     $field_instance = _stanford_cap_api_profiles_generate_instance_info($field_info['type'], $drupal_field_name, $f_name, $f_schema, $drupal_parent_field);
     if (!empty($field_instance)) {
@@ -1404,11 +1450,11 @@ function _stanford_cap_api_profiles_synchronize_schema_subfields($f_name, $f_sch
       watchdog('stanford_cap_api_profiles', $message, $vars, WATCHDOG_WARNING);
     }
   }
-  $field_weigth++;
+  $field_weight++;
   if ($field_info['type'] == 'field_collection') {
-    $subfield_weigth =& drupal_static(__FUNCTION__ . '_subfields', array());
-    if (!isset($subfield_weigth[$drupal_field_name])) {
-      $subfield_weigth[$drupal_field_name] = 0;
+    $subfield_weight =& drupal_static(__FUNCTION__ . '_subfields', array());
+    if (!isset($subfield_weight[$drupal_field_name])) {
+      $subfield_weight[$drupal_field_name] = 0;
     }
     $subfields = array();
     // Multivalue field colletion.
@@ -1421,12 +1467,12 @@ function _stanford_cap_api_profiles_synchronize_schema_subfields($f_name, $f_sch
 
     foreach ($subfields as $subfield => $schema) {
       if (!isset($schema['weight'])) {
-        $schema['weight'] = $subfield_weigth[$drupal_field_name];
+        $schema['weight'] = $subfield_weight[$drupal_field_name];
       }
       // We need this field to successfully apply profile layout.
       $field_path = empty($parent_field) ? $f_name : $parent_field . '.' . $f_name;
       _stanford_cap_api_profiles_synchronize_schema_subfields($subfield, $schema, $drupal_field_name, $field_path, $operations);
-      $subfield_weigth[$drupal_field_name]++;
+      $subfield_weight[$drupal_field_name]++;
     }
   }
 }
@@ -2052,42 +2098,50 @@ function _stanford_cap_api_profiles_sync_schema_batch() {
  * @return int
  *   New file ID or NULL in case of error.
  */
-function _stanford_cap_api_profiles_save_image_file($field_name, $field_data) {
-  $ext = drupal_substr($field_data['contentType'], 6);
-  $request_url = $field_data['url'];
-  parse_str(parse_url($request_url, PHP_URL_QUERY), $query);
-  $profile_id = $query['facultyId'];
+function _stanford_cap_api_profiles_save_image_file($profile) {
+  $image_size = 'bigger';
 
-  $response = drupal_http_request($request_url);
-  if (property_exists($response, 'error')) {
-    $error_msg = 'Failed to fetch profile image of field "%field_name" for profile "%profile_id". Error code is "%code", error message is "%msg", request string was "%request".';
-    $vars = array(
-      '%code' => $response->code,
-      '%msg' => $response->status_message,
-      '%request' => $request_url,
-      '%profile_id' => $profile_id,
-      '%field_name' => $field_name,
-    );
-    watchdog('stanford_cap_api_profiles', $error_msg, $vars, WATCHDOG_WARNING);
+  if (!empty($profile['profilePhotos']) && !empty($profile['profilePhotos'][$image_size])) {
+    $field_data = $profile['profilePhotos'][$image_size];
+    $ext = drupal_substr($field_data['contentType'], 6);
+    $profile_id = $profile['profileId'];
+    $request_url = $field_data['url'];
 
-    return NULL;
-  }
-  else {
-    // @todo Add check is file exists and size is same, other way we will multiple DB file entries every sync.
-    $file_dir = 'cap_profile_images';
-    $path = 'public://'
-      . $file_dir
-      . '/profile_'
-      . $profile_id . '_' . $field_data['type'] . '.' . $ext;
-    $dir = drupal_dirname($path);
-    if (!is_dir($dir) && !mkdir($dir)) {
-      watchdog('stanford_cap_api_profiles', 'Failed to create directory %dir', array('%dir' => $dir), WATCHDOG_WARNING);
+    $response = drupal_http_request($request_url);
+    if (property_exists($response, 'error')) {
+      $error_msg = 'Failed to fetch profile image of field "%field_name" for profile "%profile_id". Error code is "%code", error message is "%msg", request string was "%request".';
+      $vars = array(
+        '%code' => $response->code,
+        '%msg' => $response->status_message,
+        '%request' => $request_url,
+        '%profile_id' => $profile_id,
+        '%field_name' => $image_size,
+      );
+      watchdog('stanford_cap_api_profiles', $error_msg, $vars, WATCHDOG_WARNING);
 
       return NULL;
     }
-    $file = file_save_data($response->data, $path, FILE_EXISTS_REPLACE);
+    else {
+      $file_dir = 'cap_profile_images';
+      $path = 'public://'
+        . $file_dir
+        . '/profile_'
+        . $profile_id . '_' . $image_size . '.' . $ext;
+      $dir = drupal_dirname($path);
+      if (!is_dir($dir) && !mkdir($dir)) {
+        watchdog(
+          'stanford_cap_api_profiles',
+          'Failed to create directory %dir',
+          array('%dir' => $dir),
+          WATCHDOG_WARNING
+        );
 
-    return $file->fid;
+        return NULL;
+      }
+      $file = file_save_data($response->data, $path, FILE_EXISTS_REPLACE);
+
+      return $file->fid;
+    }
   }
 }
 
@@ -2284,4 +2338,50 @@ function stanford_cap_api_profiles_views_default_views_alter(&$views) {
   if (!variable_get('stanford_cap_api_profiles_schema_synchronized', FALSE) && isset($views['cap_api_manage_profiles'])) {
     $views['cap_api_manage_profiles']->disabled = TRUE;
   }
+}
+
+/**
+ * Defines if the profile import is forbidden.
+ *
+ * @param int $profile_id
+ *   Profile ID.
+ *
+ * @return bool
+ *   Returns TRUE if profile is forbidden to import based on profile type
+ *   and filter settings.
+ */
+function stanford_cap_api_profiles_profile_import_forbidden($profile_id) {
+  $profile = stanford_cap_api_profiles_get_profile($profile_id);
+  $filters = stanford_cap_api_profiles_get_filters();
+  // Returns array of allowed to import profile types profile belongs to.
+  $types = array_uintersect_assoc($filters, $profile['affiliations'], '_stanford_cap_api_profiles_filters_compare');
+
+  return empty($types);
+}
+
+/**
+ * Helper to get filter settings.
+ *
+ * @return array
+ *   Array of profile types allowed to be imported.
+ */
+function stanford_cap_api_profiles_get_filters() {
+  return variable_get('stanford_cap_api_profiles_filter', array('capFaculty' => 'capFaculty'));
+}
+
+/**
+ * Filter callback.
+ *
+ * Expecting first value to be from $filters array.
+ *
+ * @see stanford_cap_api_profiles_profile_import_forbidden()
+ */
+function _stanford_cap_api_profiles_filters_compare($a, $b) {
+  $return = -1;
+
+  if (!empty($a) && !empty($b)) {
+    $return = 0;
+  }
+
+  return $return;
 }
